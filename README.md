@@ -1,16 +1,71 @@
-# React + Vite
+# FridgePolice
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+A shared-fridge inventory and food coordination application that helps people manage food availability, request portions, prevent over-allocation, and keep inventory records accurate.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **Inventory Management:** View food items, quantities, and availability.
+- **Food Requests:** Request portions of available items.
+- **Request Approval:** Approve or reject requests while preventing multiple approvals from exceeding available quantities.
+- **Reservation Expiry:** Simulate expired reservations and release reserved portions.
+- **Inventory Corrections:** Record food that has been consumed, gone missing, or spoiled.
+- **Activity Log:** Maintain a record of inventory corrections and important actions.
+- **Local Persistence:** Store application data using browser local storage.
 
-## React Compiler
+## Tech Stack
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- React
+- Vite
+- JavaScript
+- CSS
+- Browser Local Storage
 
-## Expanding the Oxlint configuration
+## Getting Started
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+### Prerequisites
+
+Install [Node.js](https://nodejs.org/).
+
+### Installation
+
+Clone the repository:
+
+```bash
+git clone YOUR_REPOSITORY_URL
+```
+
+Navigate to the project directory:
+
+```bash
+cd FridgePolice
+```
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Start the development server:
+
+```bash
+npm run dev
+```
+
+Open the local URL displayed in your terminal.
+
+## Production Build
+
+To create a production build, run:
+
+```bash
+npm run build
+```
+
+## Data Storage
+
+FridgePolice currently uses browser local storage to persist application data. It does not currently use a shared backend database, so data is stored locally in the browser.
+
+## Project Purpose
+
+FridgePolice aims to make shared-fridge coordination more reliable by improving inventory visibility, managing food requests, and recording changes to food availability.
