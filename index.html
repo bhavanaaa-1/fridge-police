@@ -4,7 +4,64 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>fridge-police</title>
+    <title>FridgePolice — Communal Food Logistics</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Epilogue:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "primary": "#00281c",
+              "primary-container": "#123f30",
+              "on-primary": "#ffffff",
+              "on-primary-container": "#7eaa97",
+              "secondary": "#496457",
+              "secondary-container": "#cbead9",
+              "on-secondary": "#ffffff",
+              "on-secondary-container": "#4f6a5d",
+              "on-secondary-fixed-variant": "#314c40",
+              "tertiary": "#1c2420",
+              "tertiary-container": "#313a35",
+              "background": "#faf7f2",
+              "surface": "#faf7f2",
+              "surface-container-lowest": "#ffffff",
+              "surface-container-low": "#e8f7ee",
+              "surface-container": "#e2f1e8",
+              "surface-container-high": "#ddece3",
+              "surface-container-highest": "#d7e6dd",
+              "surface-dim": "#cfded5",
+              "surface-bright": "#faf7f2",
+              "surface-tint": "#3c6756",
+              "on-surface": "#111e19",
+              "on-surface-variant": "#414944",
+              "outline": "#717974",
+              "outline-variant": "#c0c8c3",
+              "error": "#ba1a1a",
+              "error-container": "#ffdad6",
+              "on-error": "#ffffff",
+              "on-error-container": "#93000a",
+            },
+            fontFamily: {
+              "display": ["Epilogue", "sans-serif"],
+              "headline-lg": ["Epilogue", "sans-serif"],
+              "headline-md": ["Epilogue", "sans-serif"],
+              "headline-sm": ["Epilogue", "sans-serif"],
+              "body-lg": ["Plus Jakarta Sans", "sans-serif"],
+              "body-md": ["Plus Jakarta Sans", "sans-serif"],
+              "body-sm": ["Plus Jakarta Sans", "sans-serif"],
+              "label-lg": ["Plus Jakarta Sans", "sans-serif"],
+              "label-md": ["Plus Jakarta Sans", "sans-serif"],
+              "label-sm": ["Plus Jakarta Sans", "sans-serif"],
+            }
+          }
+        }
+      };
+    </script>
   </head>
   <body>
     <div id="root"></div>

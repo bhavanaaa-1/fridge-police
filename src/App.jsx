@@ -1,408 +1,591 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import "./App.css";
-
-const KEY = "fridge-police-final";
-const PEOPLE = ["Alex", "Jordan", "Casey", "Sam"];
-const INITIAL = [
-  { id: "pizza-001", name: "Pizza", owner: "Alex", quantity: 25, status: "available" },
-  { id: "pasta-001", name: "Pasta", owner: "Alex", quantity: 100, status: "available" },
-  { id: "ketchup-001", name: "Heinz Ketchup", owner: "Jordan", quantity: 100, status: "available" },
-  { id: "ketchup-002", name: "Heinz Ketchup", owner: "Casey", quantity: 100, status: "available" },
-  { id: "juice-001", name: "Orange Juice", owner: "Casey", quantity: 100, status: "available" },
-];
-const EXPIRES_IN = 24 * 60 * 60 * 1000;
-
-function normalize(raw) {
-  const items = Array.isArray(raw?.items) ? raw.items : INITIAL;
-  const requests = Array.isArray(raw?.requests) ? raw.requests : [];
-  const log = Array.isArray(raw?.log) ? raw.log : [];
-  return {
-    items: items.filter((x) => x && x.id).map((x) => ({
-      ...x,
-      quantity: Number.isFinite(Number(x.quantity)) ? Math.max(0, Math.min(100, Number(x.quantity))) : 0,
-      status: x.status || "available",
-    })),
-    requests: requests.filter((x) => x && x.id).map((x) => ({
-      ...x,
-      amount: Number(x.amount) || 0,
-      status: x.status || "pending",
-    })),
-    log,
-  };
-}
-
-function loadData() {
-  try {
-    for (const key of [KEY, "fridge-police-complete-v1", "fridge-police-state-v2"]) {
-      const saved = localStorage.getItem(key);
-      if (saved) return normalize(JSON.parse(saved));
-    }
-    const oldItems = localStorage.getItem("fridge-police-items");
-    return normalize({ items: oldItems ? JSON.parse(oldItems) : INITIAL });
-  } catch (error) {
-    console.error("Could not load saved fridge data:", error);
-    return normalize({});
-  }
-}
-
-function expire(data, now = Date.now()) {
-  return {
-    ...data,
-    requests: data.requests.map((r) =>
-      r.status === "approved" && r.expiresAt <= now
-        ? { ...r, status: "expired", expiredAt: now }
-        : r
-    ),
-  };
-}
-
-function reserved(data, itemId) {
-  return data.requests
-    .filter((r) => r.itemId === itemId && r.status === "approved")
-    .reduce((sum, r) => sum + r.amount, 0);
-}
-
-function newId() {
-  return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-function emoji(name) {
-  const n = name.toLowerCase();
-  if (n.includes("pizza")) return "🍕";
-  if (n.includes("pasta")) return "🍝";
-  if (n.includes("ketchup") || n.includes("tomato")) return "🍅";
-  if (n.includes("juice")) return "🧃";
-  if (n.includes("milk")) return "🥛";
-  if (n.includes("yogurt")) return "🥣";
-  if (n.includes("bread")) return "🍞";
-  if (n.includes("chicken")) return "🍗";
-  return "🥡";
-}
-
-function prettyStatus(item, free) {
-  if (item.status !== "available") return item.status;
-  if (free <= 0 && item.quantity > 0) return "reserved";
-  if (item.quantity <= 0) return "depleted";
-  return "available";
-}
+import { apiRequest, clearToken, getToken, setToken } from "./lib/api";
+import Navigation from "./components/Navigation";
+import HomeDashboard from "./components/HomeDashboard";
+import MyFridges from "./components/MyFridges";
+import Discover from "./components/Discover";
+import MyRequests from "./components/MyRequests";
+import ActivityFeed from "./components/ActivityFeed";
+import CreateFridgeModal from "./components/CreateFridgeModal";
+import Settings from "./components/Settings";
 
 function App() {
-  const [data, setData] = useState(loadData);
-  const [message, setMessage] = useState("");
-  const [foodName, setFoodName] = useState("");
-  const [foodOwner, setFoodOwner] = useState("Alex");
-  const [foodQuantity, setFoodQuantity] = useState("100");
-  const [requester, setRequester] = useState("Jordan");
-  const [itemId, setItemId] = useState("pizza-001");
-  const [amount, setAmount] = useState("25");
-  const [correctionId, setCorrectionId] = useState("juice-001");
-  const [correctionType, setCorrectionType] = useState("missing");
-  const [correctionAmount, setCorrectionAmount] = useState("25");
-  const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState("all");
-  const [activeNav, setActiveNav] = useState("inventory");
+  const [token, setTokenState] = useState(getToken());
+  const [user, setUser] = useState(null);
+  const [authMode, setAuthMode] = useState("login");
+  const [authForm, setAuthForm] = useState({ name: "", email: "", password: "" });
+  const [authError, setAuthError] = useState("");
+  const [authFieldErrors, setAuthFieldErrors] = useState({});
+  const [authLoading, setAuthLoading] = useState(false);
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
+  const [showRegisterPassword, setShowRegisterPassword] = useState(false);
+
+  // App Navigation & Selected Fridge state
+  const [activeNav, setActiveNav] = useState("home"); // "home" | "fridges" | "discover" | "my-requests" | "activity" | "settings"
+  const [fridges, setFridges] = useState([]);
+  const [selectedFridgeId, setSelectedFridgeId] = useState(
+    sessionStorage.getItem("fridgepolice_fridge") || ""
+  );
+  const [createFridgeOpen, setCreateFridgeOpen] = useState(false);
+
+  // Theme state (synced with localStorage & html attributes)
+  const [isDark, setIsDark] = useState(() => {
+    const saved = localStorage.getItem("fridgepolice_theme");
+    if (saved) return saved === "dark";
+    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
+  });
 
   useEffect(() => {
-    try {
-      localStorage.setItem(KEY, JSON.stringify(data));
-    } catch (error) {
-      console.error("Could not save fridge data:", error);
-      setMessage("Could not save data. Check browser storage settings.");
+    if (isDark) {
+      document.documentElement.setAttribute("data-theme", "dark");
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.setAttribute("data-theme", "light");
+      document.documentElement.classList.remove("dark");
     }
-  }, [data]);
+  }, [isDark]);
 
-  useEffect(() => {
-    const timer = setInterval(() => setData((current) => expire(current)), 1000);
-    return () => clearInterval(timer);
+  const toggleTheme = useCallback(() => {
+    setIsDark((prev) => {
+      const next = !prev;
+      localStorage.setItem("fridgepolice_theme", next ? "dark" : "light");
+      return next;
+    });
   }, []);
 
-  function addFood(e) {
-    e.preventDefault();
-    const name = foodName.trim();
-    const quantity = Number(foodQuantity);
-    if (!name || !Number.isFinite(quantity) || quantity <= 0 || quantity > 100) {
-      setMessage("Enter a name and a quantity between 1 and 100.");
-      return;
-    }
-    const item = { id: newId(), name, owner: foodOwner, quantity, status: "available" };
-    setData((d) => ({ ...d, items: [...d.items, item] }));
-    setFoodName("");
-    setFoodQuantity("100");
-    setCorrectionId((current) => current || item.id);
-    setItemId((current) => current || item.id);
-    setMessage("Food added to the fridge.");
-  }
+  // Notification Toast state
+  const [notification, setNotification] = useState(null);
 
-  function requestFood(e) {
-    e.preventDefault();
-    const quantity = Number(amount);
-    const item = data.items.find((x) => x.id === itemId);
-    if (!item || !Number.isFinite(quantity) || quantity <= 0) {
-      setMessage("Choose an item and enter a valid portion.");
-      return;
-    }
-    if (requester === item.owner) {
-      setMessage("You cannot request your own food.");
-      return;
-    }
-    if (item.status !== "available" || quantity > item.quantity - reserved(data, item.id)) {
-      setMessage("Not enough unreserved food is available.");
-      return;
-    }
-    setData((d) => ({
-      ...d,
-      requests: [...d.requests, {
-        id: newId(), itemId: item.id, itemName: item.name, owner: item.owner,
-        requester, amount: quantity, status: "pending", createdAt: Date.now(),
-      }],
-    }));
-    setMessage("Request submitted for owner approval.");
-    setActiveNav("requests");
-    document.getElementById("requests")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
+  const notify = useCallback((message, type = "info") => {
+    setNotification({ message, type });
+    setTimeout(() => {
+      setNotification((curr) => (curr?.message === message ? null : curr));
+    }, 4500);
+  }, []);
 
-  function decide(id, action) {
-    const current = expire(data);
-    const request = current.requests.find((r) => r.id === id);
-    if (!request || request.status !== "pending") {
-      setData(current);
-      setMessage("This request is no longer pending.");
-      return;
-    }
-    if (action === "reject") {
-      setData({ ...current, requests: current.requests.map((r) => r.id === id ? { ...r, status: "rejected" } : r) });
-      setMessage("Request rejected.");
-      return;
-    }
-    const item = current.items.find((x) => x.id === request.itemId);
-    const available = item ? item.quantity - reserved(current, item.id) : 0;
-    if (!item || item.status !== "available" || request.amount > available) {
-      setData({ ...current, requests: current.requests.map((r) => r.id === id ? { ...r, status: "rejected" } : r) });
-      setMessage("Approval denied: that portion is no longer available.");
-      return;
-    }
-    setData({
-      ...current,
-      requests: current.requests.map((r) => r.id === id
-        ? { ...r, status: "approved", approvedAt: Date.now(), expiresAt: Date.now() + EXPIRES_IN }
-        : r),
-    });
-    setMessage("Approved. The portion is reserved for 24 hours.");
-  }
-
-  function consume(id) {
-    const current = expire(data);
-    const request = current.requests.find((r) => r.id === id);
-    const item = current.items.find((x) => x.id === request?.itemId);
-    if (!request || request.status !== "approved" || !item || item.status !== "available" || request.amount > item.quantity) {
-      setData(current);
-      setMessage("Cannot consume this portion. Check its approval and inventory.");
-      return;
-    }
-    const quantity = item.quantity - request.amount;
-    setData({
-      ...current,
-      items: current.items.map((x) => x.id === item.id ? { ...x, quantity, status: quantity === 0 ? "depleted" : "available" } : x),
-      requests: current.requests.map((r) => r.id === id ? { ...r, status: "consumed", consumedAt: Date.now() } : r),
-      log: [...current.log, { id: newId(), type: "Consumed", itemName: item.name, details: `${request.requester} consumed ${request.amount}%.`, at: Date.now() }],
-    });
-    setMessage("Consumption recorded and inventory updated.");
-  }
-
-  function simulateExpiry() {
-    const current = expire(data);
-    let count = 0;
-    const requests = current.requests.map((r) => {
-      if (r.status === "approved") {
-        count++;
-        return { ...r, status: "expired", expiredAt: Date.now() };
+  // Load current user profile when token exists
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await apiRequest("/auth/me");
+        if (!cancelled) setUser(data.user);
+      } catch (err) {
+        if (!cancelled) {
+          clearToken();
+          setTokenState("");
+          setUser(null);
+          notify(err.message, "error");
+        }
       }
-      return r;
-    });
-    if (!count) {
-      setMessage("No active approvals to expire.");
-      return;
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, notify]);
+
+  // Load fridges when user is known
+  const fetchFridges = useCallback(async () => {
+    if (!user) return;
+    try {
+      const data = await apiRequest("/fridges");
+      setFridges(data.fridges || []);
+      setSelectedFridgeId((prev) => {
+        if (prev && data.fridges?.some((f) => f.id === prev)) return prev;
+        const first = data.fridges?.[0]?.id || "";
+        if (first) sessionStorage.setItem("fridgepolice_fridge", first);
+        else sessionStorage.removeItem("fridgepolice_fridge");
+        return first;
+      });
+    } catch (err) {
+      notify(err.message, "error");
     }
-    setData({ ...current, requests });
-    setMessage(`${count} approval(s) expired. Their portions are available again.`);
+  }, [user, notify]);
+
+  useEffect(() => {
+    fetchFridges();
+  }, [fetchFridges]);
+
+  // Update selected fridge in sessionStorage
+  const handleSelectFridge = (id) => {
+    setSelectedFridgeId(id);
+    if (id) {
+      sessionStorage.setItem("fridgepolice_fridge", id);
+    } else {
+      sessionStorage.removeItem("fridgepolice_fridge");
+    }
+  };
+
+  // RFC-compliant email validation matching backend Zod email schema rules
+  const EMAIL_REGEX =
+    /^(?:[A-Za-z0-9_'+-]+\.)*[A-Za-z0-9_'+-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9-]*\.)+[A-Za-z]{2,}$/i;
+
+  function validateAuthForm() {
+    const errors = {};
+    if (authMode === "register" && !authForm.name.trim()) {
+      errors.name = "Name is required.";
+    }
+    const trimmedEmail = authForm.email.trim();
+    if (!trimmedEmail) {
+      errors.email = "Email is required.";
+    } else if (!EMAIL_REGEX.test(trimmedEmail)) {
+      errors.email = "Enter a valid email address.";
+    }
+    if (authForm.password.length < 8) {
+      errors.password = "Password must contain at least 8 characters.";
+    }
+    setAuthFieldErrors(errors);
+    return Object.keys(errors).length === 0;
   }
 
-  function correctInventory(e) {
+  async function handleAuthSubmit(e) {
     e.preventDefault();
-    const item = data.items.find((x) => x.id === correctionId);
-    const quantity = Number(correctionAmount);
-    if (!item || item.status !== "available") {
-      setMessage("Choose an available item.");
-      return;
+    setAuthError("");
+    setAuthFieldErrors({});
+    if (!validateAuthForm()) return;
+    setAuthLoading(true);
+    try {
+      const trimmedEmail = authForm.email.trim();
+      const normalizedEmail = trimmedEmail.toLowerCase();
+
+      if (authMode === "register") {
+        await apiRequest("/auth/register", {
+          method: "POST",
+          body: JSON.stringify({
+            name: authForm.name.trim(),
+            email: normalizedEmail,
+            password: authForm.password,
+          }),
+        });
+        // Automatically authenticate newly registered user
+        const loginData = await apiRequest("/auth/login", {
+          method: "POST",
+          body: JSON.stringify({
+            email: normalizedEmail,
+            password: authForm.password,
+          }),
+        });
+        setToken(loginData.token);
+        setTokenState(loginData.token);
+        setUser(loginData.user);
+        setAuthForm({ name: "", email: "", password: "" });
+      } else {
+        const data = await apiRequest("/auth/login", {
+          method: "POST",
+          body: JSON.stringify({
+            email: normalizedEmail,
+            password: authForm.password,
+          }),
+        });
+        setToken(data.token);
+        setTokenState(data.token);
+        setUser(data.user);
+        setAuthForm({ name: "", email: "", password: "" });
+      }
+    } catch (err) {
+      if (Array.isArray(err.fieldErrors)) {
+        const mapped = {};
+        err.fieldErrors.forEach((e) => {
+          const field = Array.isArray(e.path) ? e.path[e.path.length - 1] : null;
+          if (field && !mapped[field]) mapped[field] = e.message;
+        });
+        setAuthFieldErrors((prev) => ({ ...prev, ...mapped }));
+      }
+      if (err.status === 409 || err.message === "Email is already registered") {
+        setAuthFieldErrors((prev) => ({
+          ...prev,
+          email: prev.email || "Email is already registered.",
+        }));
+      }
+      setAuthError(err.message);
+    } finally {
+      setAuthLoading(false);
     }
-    if (correctionType === "consumed" && (!Number.isFinite(quantity) || quantity <= 0 || quantity > item.quantity)) {
-      setMessage("Enter a quantity within the recorded inventory.");
-      return;
-    }
-    const missing = correctionType === "missing";
-    const spoiled = correctionType === "spoiled";
-    const remaining = missing || spoiled ? 0 : item.quantity - quantity;
-    const status = missing ? "missing" : spoiled ? "spoiled" : remaining === 0 ? "depleted" : "available";
-    const description = missing ? `${item.quantity}% reported missing.` : spoiled ? `${item.quantity}% discarded as spoiled.` : `${quantity}% consumed outside the app.`;
-    setData({
-      ...data,
-      items: data.items.map((x) => x.id === item.id ? { ...x, quantity: remaining, status } : x),
-      requests: data.requests.map((r) => r.itemId === item.id && ["pending", "approved"].includes(r.status)
-        ? { ...r, status: "cancelled", cancelledAt: Date.now() } : r),
-      log: [...data.log, {
-        id: newId(), type: missing ? "Missing" : spoiled ? "Spoiled / discarded" : "Off-app consumption",
-        itemName: item.name, details: description, at: Date.now(),
-      }],
-    });
-    setMessage("Inventory corrected. Active requests for this item were cancelled.");
   }
 
-  function resetDemo() {
-    setData(normalize({ items: INITIAL, requests: [], log: [] }));
-    setItemId("pizza-001");
-    setCorrectionId("juice-001");
-    setMessage("Demo reset.");
+  function handleLogout() {
+    clearToken();
+    setTokenState("");
+    setUser(null);
+    setFridges([]);
+    setSelectedFridgeId("");
+    sessionStorage.removeItem("fridgepolice_fridge");
   }
 
-  const availableCount = data.items.filter((x) => x.status === "available" && x.quantity - reserved(data, x.id) > 0).length;
-  const pendingCount = data.requests.filter((r) => r.status === "pending").length;
-  const approvedCount = data.requests.filter((r) => r.status === "approved").length;
+  // ==========================================
+  // AUTHENTICATION SCREEN (MATCHING STITCH)
+  // ==========================================
+  if (!token || !user) {
+    const showPassword = authMode === "login" ? showLoginPassword : showRegisterPassword;
+    const setShowPassword = authMode === "login" ? setShowLoginPassword : setShowRegisterPassword;
 
-  const filteredItems = useMemo(() => data.items.filter((item) => {
-    const free = Math.max(0, item.quantity - reserved(data, item.id));
-    const searchable = `${item.name} ${item.owner} ${item.id}`.toLowerCase().includes(search.toLowerCase());
-    if (!searchable) return false;
-    if (filter === "available") return item.status === "available" && free > 0;
-    if (filter === "attention") return item.status !== "available" || free <= 0;
-    return true;
-  }), [data, search, filter]);
+    const fillDemo = (email, password) => {
+      setAuthForm((prev) => ({
+        ...prev,
+        email,
+        password,
+      }));
+      setAuthError("");
+      setAuthFieldErrors({});
+    };
 
-  function scrollTo(id, nav) {
-    setActiveNav(nav);
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
+    return (
+      <main className="auth-page-stitch">
+        <div className="auth-card-stitch">
+          {/* Brand Crest & Header */}
+          <header className="auth-header-stitch">
+            <div className="auth-crest-wrap">
+              <span className="material-symbols-outlined text-[28px] text-primary">kitchen</span>
+            </div>
+            <div className="auth-brand-tag-row">
+              <span className="auth-brand-title">FridgePolice</span>
+              <span className="auth-version-pill">v2.4</span>
+            </div>
+            <h1 className="auth-headline">
+              {authMode === "login" ? "Welcome back" : "Create an account"}
+            </h1>
+            <p className="auth-subtitle">
+              {authMode === "login"
+                ? "Sign in to manage your household and communal pantry provisions."
+                : "Register to coordinate and share communal pantry provisions."}
+            </p>
+          </header>
 
-  return (
-    <main className="app-shell">
-      <header className="topbar">
-        <a className="brand" href="#top" onClick={() => setActiveNav("inventory")} aria-label="FridgePolice home">
-          <span className="brand-mark" aria-hidden="true">F</span>
-          <span className="brand-copy"><strong>FridgePolice</strong><small>Shared fridge manager</small></span>
-        </a>
-        <span className="room-label"><span className="room-dot" /> Floor 3 Kitchen</span>
-        <nav className="main-nav" aria-label="Main navigation">
-          <button className={activeNav === "inventory" ? "nav-link active" : "nav-link"} onClick={() => scrollTo("inventory", "inventory")}>Inventory</button>
-          <button className={activeNav === "requests" ? "nav-link active" : "nav-link"} onClick={() => scrollTo("requests", "requests")}>Requests{pendingCount > 0 && <span className="nav-count">{pendingCount}</span>}</button>
-          <button className={activeNav === "quick-actions" ? "nav-link active" : "nav-link"} onClick={() => scrollTo("quick-actions", "quick-actions")}>Quick Actions</button>
-          <button className={activeNav === "activity" ? "nav-link active" : "nav-link"} onClick={() => scrollTo("activity", "activity")}>Activity</button>
-        </nav>
-      </header>
+          {authError && (
+            <div className="auth-alert" role="alert">
+              <span className="auth-alert-icon">!</span>
+              <span>{authError}</span>
+            </div>
+          )}
 
-      <div className="page">
-        <section className="page-intro" id="top">
-          <div>
-            <p className="eyebrow">SHARED FOOD, LESS WASTE</p>
-            <h1>Your fridge, at a glance.</h1>
-            <p className="subtitle">Keep track of what's here, who owns it, and what's available to share.</p>
-          </div>
-          <div className="intro-actions">
-            <button className="button button-secondary" onClick={() => scrollTo("quick-actions", "quick-actions")}>Audit &amp; discrepancies</button>
-            <button className="button button-primary" onClick={() => scrollTo("add-food", "quick-actions")}>＋ Add food</button>
-          </div>
-        </section>
+          {/* Interactive Credentials Form */}
+          <form className="auth-form-stitch" onSubmit={handleAuthSubmit} noValidate>
+            {authMode === "register" && (
+              <div className="auth-field-group">
+                <div className="auth-label-row">
+                  <label htmlFor="nameInput" className="auth-field-label">Full Name</label>
+                  <span className="auth-field-required">Required</span>
+                </div>
+                <div className="auth-input-wrapper">
+                  <span className="material-symbols-outlined auth-input-icon">person</span>
+                  <input
+                    id="nameInput"
+                    type="text"
+                    value={authForm.name}
+                    onChange={(e) => {
+                      setAuthForm({ ...authForm, name: e.target.value });
+                      if (authFieldErrors.name) setAuthFieldErrors((prev) => ({ ...prev, name: "" }));
+                      if (authError) setAuthError("");
+                    }}
+                    placeholder="Maya Chen"
+                    autoComplete="name"
+                    className={authFieldErrors.name ? "input-has-error" : ""}
+                  />
+                </div>
+                {authFieldErrors.name && (
+                  <span className="field-error" role="alert">
+                    {authFieldErrors.name}
+                  </span>
+                )}
+              </div>
+            )}
 
-        {message && <div className="toast" role="status"><span>{message}</span><button onClick={() => setMessage("")} aria-label="Dismiss message">×</button></div>}
-
-        <section className="inventory-section" id="inventory">
-          <div className="section-top">
-            <div><h2>Fridge inventory</h2><p className="section-subtitle">{data.items.length} items tracked · quantities shown as a percentage</p></div>
-            <button className="text-button" onClick={resetDemo}>Reset demo</button>
-          </div>
-          <div className="inventory-toolbar">
-            <label className="search-box"><span aria-hidden="true">⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search food, owner, or ID..." aria-label="Search inventory" /></label>
-            <div className="filter-group" aria-label="Filter inventory">
-              {[["all", "All items"], ["available", "Available only"], ["attention", "Needs attention"]].map(([value, label]) =>
-                <button key={value} className={filter === value ? "filter-button selected" : "filter-button"} onClick={() => setFilter(value)}>{label}</button>
+            <div className="auth-field-group">
+              <div className="auth-label-row">
+                <label htmlFor="emailInput" className="auth-field-label">Pantry ID / Email</label>
+                <span className="auth-field-required">Required</span>
+              </div>
+              <div className="auth-input-wrapper">
+                <span className="material-symbols-outlined auth-input-icon">mail</span>
+                <input
+                  id="emailInput"
+                  type="email"
+                  value={authForm.email}
+                  onChange={(e) => {
+                    setAuthForm({ ...authForm, email: e.target.value });
+                    if (authFieldErrors.email) setAuthFieldErrors((prev) => ({ ...prev, email: "" }));
+                    if (authError) setAuthError("");
+                  }}
+                  placeholder="bee@larder.org"
+                  autoComplete="email"
+                  className={authFieldErrors.email ? "input-has-error" : ""}
+                />
+              </div>
+              {authFieldErrors.email && (
+                <span className="field-error" role="alert">
+                  {authFieldErrors.email}
+                </span>
               )}
             </div>
-          </div>
-          {filteredItems.length === 0 ? <p className="empty-state">No food items match your search.</p> :
-            <div className="inventory-grid">
-              {filteredItems.map((item) => {
-                const reservedAmount = reserved(data, item.id);
-                const free = Math.max(0, item.quantity - reservedAmount);
-                const status = prettyStatus(item, free);
-                return <article className="food-card" key={item.id}>
-                  <div className="food-card-top"><span className="item-id">#{item.id.slice(0, 8).toUpperCase()}</span><span className={`status status-${status}`}>{free > 0 && status === "available" ? "Available" : status}</span></div>
-                  <div className="food-title-row"><span className="food-emoji" aria-hidden="true">{emoji(item.name)}</span><div className="food-title"><h3>{item.name}</h3><p>Owned by <strong>{item.owner}</strong></p></div></div>
-                  <p className="full-id">ID: {item.id}</p>
-                  <div className="stock-breakdown">
-                    <div className="stock-labels"><span>Stock breakdown</span><strong>Total: {item.quantity}%</strong></div>
-                    <div className="stock-bar"><span className="stock-reserved" style={{ width: `${Math.min(100, reservedAmount)}%` }} /><span className="stock-free" style={{ width: `${free}%` }} /></div>
-                    <div className="stock-labels"><span>Reserved: {reservedAmount}%</span><strong>Free: {free}%</strong></div>
-                  </div>
-                  <div className="food-card-bottom"><span className="muted-small">{item.quantity === 0 ? "No stock left" : free === 0 ? "Fully reserved" : "Ready to share"}</span><button className="mini-button" disabled={free <= 0 || item.status !== "available"} onClick={() => { setItemId(item.id); scrollTo("request-food", "requests"); }}>Request</button></div>
-                </article>;
-              })}
+
+            <div className="auth-field-group">
+              <div className="auth-label-row">
+                <label htmlFor="passwordInput" className="auth-field-label">Password</label>
+                {authMode === "login" && (
+                  <a
+                    href="#forgot"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      notify("Contact your household steward or administrator to reset password.", "info");
+                    }}
+                    className="auth-forgot-link"
+                  >
+                    Forgot password?
+                  </a>
+                )}
+              </div>
+              <div className="auth-input-wrapper">
+                <span className="material-symbols-outlined auth-input-icon">lock</span>
+                <input
+                  id="passwordInput"
+                  type={showPassword ? "text" : "password"}
+                  value={authForm.password}
+                  onChange={(e) => {
+                    setAuthForm({ ...authForm, password: e.target.value });
+                    if (authFieldErrors.password) setAuthFieldErrors((prev) => ({ ...prev, password: "" }));
+                    if (authError) setAuthError("");
+                  }}
+                  placeholder="••••••••••••"
+                  autoComplete={authMode === "login" ? "current-password" : "new-password"}
+                  className={authFieldErrors.password ? "input-has-error" : ""}
+                />
+                <button
+                  type="button"
+                  className="auth-password-toggle-btn"
+                  onClick={() => setShowPassword((v) => !v)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? "Hide" : "Show"}
+                </button>
+              </div>
+              {authMode === "register" && (
+                <span className="field-hint">Must contain at least 8 characters.</span>
+              )}
+              {authFieldErrors.password && (
+                <span className="field-error" role="alert">
+                  {authFieldErrors.password}
+                </span>
+              )}
             </div>
-          }
-        </section>
 
-        <section className="panel request-panel" id="requests">
-          <div className="section-top"><div><h2>Pending portion requests</h2><p className="section-subtitle">{pendingCount} waiting for owner approval</p></div><button className="button button-secondary button-small" onClick={simulateExpiry}>Simulate expiry</button></div>
-          {data.requests.length === 0 ? <p className="empty-state">No requests yet. Submit a request for a portion to see it here.</p> :
-            <div className="request-list">{[...data.requests].reverse().map((r) => {
-              const item = data.items.find((x) => x.id === r.itemId);
-              return <article className="request-row" key={r.id}>
-                <span className="request-avatar">{r.requester.slice(0, 1)}</span>
-                <div className="request-details"><h3>{r.itemName} <span>· {r.amount}%</span></h3><p>{r.requester} requested a portion from {r.owner}</p>{r.status === "approved" && <small>Expires {new Date(r.expiresAt).toLocaleString()}</small>}</div>
-                <div className="request-actions"><span className={`status status-${r.status}`}>{r.status}</span>{r.status === "pending" && <><button className="button button-primary button-small" onClick={() => decide(r.id, "approve")}>Approve</button><button className="button button-secondary button-small" onClick={() => decide(r.id, "reject")}>Decline</button></>}{r.status === "approved" && <button className="button button-primary button-small" onClick={() => consume(r.id)}>Mark consumed</button>}{!item && <small>Item no longer exists</small>}</div>
-              </article>;
-            })}</div>
-          }
-        </section>
+            <div className="auth-action-row">
+              <button
+                type="submit"
+                className="auth-submit-btn"
+                disabled={authLoading}
+              >
+                <span>
+                  {authLoading
+                    ? "Authenticating..."
+                    : authMode === "login"
+                    ? "Sign In to FridgePolice"
+                    : "Create FridgePolice Account"}
+                </span>
+                <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
+              </button>
+            </div>
+          </form>
 
-        <section className="bottom-grid" id="quick-actions">
-          <article className="panel compact-panel" id="add-food">
-            <div className="section-top compact-heading"><div><h2>Add food</h2><p className="section-subtitle">Add an item to the fridge.</p></div></div>
-            <form className="form-stack" onSubmit={addFood}>
-              <label>Food name<input value={foodName} onChange={(e) => setFoodName(e.target.value)} placeholder="e.g. Milk" maxLength={60} required /></label>
-              <label>Owner<select value={foodOwner} onChange={(e) => setFoodOwner(e.target.value)}>{PEOPLE.map((p) => <option key={p}>{p}</option>)}</select></label>
-              <label>Quantity (%)<input type="number" min="1" max="100" value={foodQuantity} onChange={(e) => setFoodQuantity(e.target.value)} required /></label>
-              <button className="button button-primary form-submit">＋ Add to fridge</button>
-            </form>
-          </article>
+          {/* Demo Quick-Fill Presets from Stitch */}
+          <div className="auth-quick-fill-card">
+            <div className="quick-fill-header">
+              <span className="quick-fill-title">Quick fill access</span>
+              <span className="material-symbols-outlined text-secondary text-[16px]">touch_app</span>
+            </div>
+            <div className="quick-fill-buttons">
+              <button
+                type="button"
+                className="quick-fill-btn"
+                onClick={() => fillDemo("bee@larder.org", "green-steward-2025")}
+              >
+                <div className="quick-fill-btn-left">
+                  <span className="quick-fill-dot dot-primary"></span>
+                  <span className="quick-fill-name">Demo: Bee <span className="quick-fill-role">(Household Steward)</span></span>
+                </div>
+                <span className="material-symbols-outlined text-[16px] text-secondary">login</span>
+              </button>
+              <button
+                type="button"
+                className="quick-fill-btn"
+                onClick={() => fillDemo("maya@larder.org", "harvest-commune-99")}
+              >
+                <div className="quick-fill-btn-left">
+                  <span className="quick-fill-dot dot-secondary"></span>
+                  <span className="quick-fill-name">Demo: Maya <span className="quick-fill-role">(Community Member)</span></span>
+                </div>
+                <span className="material-symbols-outlined text-[16px] text-secondary">login</span>
+              </button>
+            </div>
+          </div>
 
-          <article className="panel compact-panel" id="physical-audit">
-            <div className="section-top compact-heading"><div><h2>Physical audit</h2><p className="section-subtitle">Correct what's actually in the fridge.</p></div></div>
-            <form className="form-stack" onSubmit={correctInventory}>
-              <label>Food item<select value={correctionId} onChange={(e) => setCorrectionId(e.target.value)}>{data.items.map((x) => <option key={x.id} value={x.id}>{x.name} — {x.owner} ({x.id.slice(0, 8)})</option>)}</select></label>
-              <label>What happened?<select value={correctionType} onChange={(e) => setCorrectionType(e.target.value)}><option value="consumed">Consumed outside the app</option><option value="missing">Item is missing</option><option value="spoiled">Food spoiled</option></select></label>
-              {correctionType === "consumed" && <label>Quantity consumed (%)<input type="number" min="1" max={data.items.find((x) => x.id === correctionId)?.quantity || 100} value={correctionAmount} onChange={(e) => setCorrectionAmount(e.target.value)} required /></label>}
-              <button className="button button-secondary form-submit">Correct inventory</button>
-            </form>
-          </article>
+          {/* Registration Switch */}
+          <div className="auth-switch-stitch">
+            <span>{authMode === "login" ? "Don't have an account?" : "Already have an account?"}</span>{" "}
+            <button
+              type="button"
+              className="auth-switch-link"
+              onClick={() => {
+                setAuthMode(authMode === "login" ? "register" : "login");
+                setAuthError("");
+                setAuthFieldErrors({});
+              }}
+            >
+              {authMode === "login" ? "Create an account" : "Sign in"}
+            </button>
+          </div>
 
-          <article className="panel compact-panel" id="request-food">
-            <div className="section-top compact-heading"><div><h2>Request a portion</h2><p className="section-subtitle">Ask an owner before taking food.</p></div></div>
-            <form className="form-stack" onSubmit={requestFood}>
-              <label>Roommate<select value={requester} onChange={(e) => setRequester(e.target.value)}>{PEOPLE.map((p) => <option key={p}>{p}</option>)}</select></label>
-              <label>Food item<select value={itemId} onChange={(e) => setItemId(e.target.value)}>{data.items.map((x) => <option key={x.id} value={x.id}>{x.name} — {x.owner} ({x.id.slice(0, 8)})</option>)}</select></label>
-              <label>Portion requested (%)<input type="number" min="1" max="100" value={amount} onChange={(e) => setAmount(e.target.value)} required /></label>
-              <button className="button button-primary form-submit">Request portion</button>
-            </form>
-          </article>
-        </section>
+          {/* Protocol Security Notice */}
+          <footer className="auth-footer-notice">
+            <span className="material-symbols-outlined text-[15px]">lock</span>
+            <span>Zero food waste · Encrypted communal sharing protocols</span>
+          </footer>
+        </div>
+      </main>
+    );
+  }
 
-        <section className="panel activity-panel" id="activity">
-          <div className="section-top"><div><h2>Breakroom activity</h2><p className="section-subtitle">Recent consumption and inventory corrections.</p></div><span className="activity-count">{data.log.length} events</span></div>
-          {data.log.length === 0 ? <p className="empty-state">Activity will appear here when food is consumed or inventory is corrected.</p> :
-            <div className="activity-list">{[...data.log].reverse().map((entry) => <article className="activity-entry" key={entry.id}><span className="activity-dot" /><div><strong>{entry.type}</strong><p>{entry.itemName} · {entry.details}</p><time dateTime={new Date(entry.at).toISOString()}>{new Date(entry.at).toLocaleString()}</time></div></article>)}</div>}
-        </section>
+  // ==========================================
+  // MAIN AUTHENTICATED PLATFORM
+  // ==========================================
+  return (
+    <div className="app-shell platform-shell">
+      {/* Universal Navigation Bar */}
+      <Navigation
+        activeNav={activeNav}
+        setActiveNav={(nav) => {
+          setActiveNav(nav);
+          // If switching to fridges without pre-selection, let MyFridges show all
+        }}
+        user={user}
+        fridges={fridges}
+        selectedFridge={fridges.find((f) => f.id === selectedFridgeId)}
+        onOpenCreateFridge={() => setCreateFridgeOpen(true)}
+        onLogout={handleLogout}
+        isDark={isDark}
+        onToggleTheme={toggleTheme}
+      />
 
-        <footer className="footer"><span>FridgePolice · Shared food, less waste.</span><span>{approvedCount} active reservation{approvedCount === 1 ? "" : "s"}</span></footer>
-      </div>
-    </main>
+      {/* Global Toast Notification */}
+      {notification && (
+        <div className={`toast-notification toast-${notification.type}`} role="status">
+          <span>{notification.message}</span>
+          <button
+            type="button"
+            className="toast-dismiss"
+            onClick={() => setNotification(null)}
+            aria-label="Dismiss notification"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {/* Main Destination Router */}
+      <main className="main-content-area">
+        {activeNav === "home" && (
+          <HomeDashboard
+            user={user}
+            fridges={fridges}
+            onSelectFridge={(id) => {
+              handleSelectFridge(id);
+              setActiveNav("fridges");
+            }}
+            onOpenCreateFridge={() => setCreateFridgeOpen(true)}
+            setActiveNav={setActiveNav}
+            onNotify={notify}
+          />
+        )}
+
+        {activeNav === "fridges" && (
+          <MyFridges
+            user={user}
+            fridges={fridges}
+            activeFridgeId={selectedFridgeId}
+            onSelectFridge={handleSelectFridge}
+            onOpenCreateFridge={() => setCreateFridgeOpen(true)}
+            onRefreshFridges={fetchFridges}
+            onNotify={notify}
+          />
+        )}
+
+        {activeNav === "discover" && (
+          <Discover
+            user={user}
+            onNotify={notify}
+            onNavigateToFridge={(id) => {
+              handleSelectFridge(id);
+              setActiveNav("fridges");
+            }}
+          />
+        )}
+
+        {activeNav === "my-requests" && (
+          <MyRequests
+            user={user}
+            onNotify={notify}
+            onNavigateToFridge={(id) => {
+              handleSelectFridge(id);
+              setActiveNav("fridges");
+            }}
+          />
+        )}
+
+        {activeNav === "activity" && (
+          <ActivityFeed
+            user={user}
+            fridges={fridges}
+            onNotify={notify}
+            onNavigateToFridge={(id) => {
+              handleSelectFridge(id);
+              setActiveNav("fridges");
+            }}
+          />
+        )}
+
+        {activeNav === "settings" && (
+          <Settings
+            user={user}
+            fridges={fridges}
+            isDark={isDark}
+            onToggleTheme={toggleTheme}
+            onNavigateToFridgeSettings={(fridgeId) => {
+              handleSelectFridge(fridgeId);
+              setActiveNav("fridges");
+            }}
+            onNotify={notify}
+            onLogout={handleLogout}
+          />
+        )}
+      </main>
+
+      {/* Create Fridge Modal */}
+      <CreateFridgeModal
+        isOpen={createFridgeOpen}
+        onClose={() => setCreateFridgeOpen(false)}
+        onCreated={(newFridge) => {
+          fetchFridges();
+          handleSelectFridge(newFridge.id);
+          setActiveNav("fridges");
+        }}
+        onNotify={notify}
+      />
+
+      {/* Editorial Platform Footer */}
+      <footer className="platform-footer">
+        <div className="footer-content">
+          <div className="footer-left">
+            <strong>FridgePolice</strong>
+            <span>Communal food logistics & zero-waste pantry intelligence</span>
+          </div>
+          <div className="footer-right">
+            <span>Signed in as {user.name} ({user.email})</span>
+            <small>© 2026 FridgePolice · Community Edition</small>
+          </div>
+        </div>
+      </footer>
+    </div>
   );
 }
 
