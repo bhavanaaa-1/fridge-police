@@ -1,15 +1,36 @@
 /* Global reset. Component styling lives in App.css. */
 :root {
-  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #1c2420;
-  background: #f3fcf5;
+  font-family: "Plus Jakarta Sans", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #111e19;
+  background-color: #faf7f2;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 * { box-sizing: border-box; }
-html { min-width: 320px; }
-body { margin: 0; min-width: 320px; min-height: 100vh; }
+html { min-width: 320px; background-color: #faf7f2; }
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background-color: #faf7f2;
+  background-image: url("/doodle-pattern.svg");
+  background-repeat: repeat;
+  background-size: 320px 320px;
+  background-attachment: fixed;
+}
+[data-theme="dark"] html,
+[data-theme="dark"] body,
+.dark html,
+.dark body {
+  background-color: #0c120e;
+  background-image:
+    radial-gradient(ellipse at 50% -10%, rgba(30, 80, 55, 0.22) 0%, transparent 65%),
+    url("/doodle-pattern-dark.svg");
+  background-repeat: no-repeat, repeat;
+  background-size: 100% 700px, 320px 320px;
+  background-attachment: fixed, fixed;
+}
 #root { min-height: 100vh; }
 button, input, select { font: inherit; }

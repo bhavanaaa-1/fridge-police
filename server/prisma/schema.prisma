@@ -1,0 +1,177 @@
+// This is the Prisma schema for the FridgePolice backend.
+// It describes the database tables and how they relate to each other.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum FridgeRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+  EXPIRED
+  COMPLETED
+}
+
+enum MembershipRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model User {
+  id            String   @id @default(cuid())
+  name          String
+  email         String   @unique
+  passwordHash  String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // A user can belong to many fridges.
+  fridgeMemberships   FridgeMember[]
+  // A user can create many food items.
+  createdFoodItems    FoodItem[]     @relation("CreatedFoodItems")
+  // A user can submit many food requests.
+  requestedFoodRequests FoodRequest[] @relation("RequestedFoodRequests")
+  // A user can approve many food requests.
+  approvedFoodRequests  FoodRequest[] @relation("ApprovedFoodRequests")
+  // A user can be the actor in many activity logs.
+  activityLogs         ActivityLog[] @relation("ActorActivityLogs")
+  // Membership requests submitted by this user
+  membershipRequests        MembershipRequest[] @relation("UserMembershipRequests")
+  // Membership requests decided by this user
+  decidedMembershipRequests MembershipRequest[] @relation("DecidedMembershipRequests")
+}
+
+model Fridge {
+  id                 String   @id @default(cuid())
+  name               String
+  description        String?
+  isDiscoverable     Boolean  @default(false)
+  publicFoodPreview  Boolean  @default(false)
+  acceptJoinRequests Boolean  @default(false)
+  publicDescription  String?
+  showMemberCount    Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  // A fridge has many members, food items, activity logs, and membership requests.
+  members            FridgeMember[]
+  foodItems          FoodItem[]
+  activityLogs       ActivityLog[]
+  membershipRequests MembershipRequest[]
+
+  @@index([isDiscoverable])
+}
+
+model FridgeMember {
+  userId   String
+  fridgeId String
+  role     FridgeRole @default(MEMBER)
+  joinedAt DateTime   @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fridge Fridge @relation(fields: [fridgeId], references: [id], onDelete: Cascade)
+
+  // Composite primary key: a user is a member of a fridge only once.
+  @@id([userId, fridgeId])
+  @@index([fridgeId])
+  @@index([userId])
+}
+
+model FoodItem {
+  id          String   @id @default(cuid())
+  fridgeId    String
+  name        String
+  category    String?
+  quantity    Decimal  @db.Decimal(10, 2)
+  unit        String
+  expiryDate  DateTime?
+  notes       String?
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  fridge    Fridge @relation(fields: [fridgeId], references: [id], onDelete: Cascade)
+  createdBy User   @relation("CreatedFoodItems", fields: [createdById], references: [id], onDelete: Restrict)
+
+  requests FoodRequest[]
+
+  @@index([fridgeId])
+  @@index([createdById])
+}
+
+model FoodRequest {
+  id                String        @id @default(cuid())
+  foodItemId        String
+  requesterId       String
+  requestedQuantity Decimal       @db.Decimal(10, 2)
+  status            RequestStatus @default(PENDING)
+  note              String?
+  approvedById      String?
+  expiresAt         DateTime?
+  decidedAt         DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  foodItem   FoodItem @relation(fields: [foodItemId], references: [id], onDelete: Cascade)
+  requester  User     @relation("RequestedFoodRequests", fields: [requesterId], references: [id], onDelete: Cascade)
+  approvedBy User?    @relation("ApprovedFoodRequests", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@index([foodItemId])
+  @@index([requesterId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model ActivityLog {
+  id         String   @id @default(cuid())
+  fridgeId   String
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String?
+  details    Json?
+  createdAt  DateTime @default(now())
+
+  fridge Fridge @relation(fields: [fridgeId], references: [id], onDelete: Cascade)
+  actor  User?  @relation("ActorActivityLogs", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([fridgeId])
+  @@index([actorId])
+  @@index([createdAt])
+}
+
+model MembershipRequest {
+  id          String                  @id @default(cuid())
+  fridgeId    String
+  userId      String
+  status      MembershipRequestStatus @default(PENDING)
+  note        String?
+  decidedById String?
+  decidedAt   DateTime?
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+
+  fridge    Fridge @relation(fields: [fridgeId], references: [id], onDelete: Cascade)
+  user      User   @relation("UserMembershipRequests", fields: [userId], references: [id], onDelete: Cascade)
+  decidedBy User?  @relation("DecidedMembershipRequests", fields: [decidedById], references: [id], onDelete: SetNull)
+
+  @@index([fridgeId])
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
