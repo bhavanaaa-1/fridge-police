@@ -1,4 +1,4 @@
-# FridgePolice 🧊👮
+# FridgePolice 
 
 > **Intelligent Communal Refrigerator Governance & Food Inventory Platform**<br/>
 > Built for shared households, co-living spaces, and community food pantries.
@@ -298,5 +298,4 @@ fridge-police/
 ## Author & Project Information
 
 - **Developer:** [bhavanaaa-1](https://github.com/bhavanaaa-1)
-- **Project Assessment:** Kalvium FridgePolice Challenge #8
 - **Repository:** [https://github.com/bhavanaaa-1/fridge-police](https://github.com/bhavanaaa-1/fridge-police)
