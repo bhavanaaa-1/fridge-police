@@ -1,660 +1,349 @@
-# FridgePolice — Comprehensive Technical Documentation
+# FridgePolice — Technical Documentation & Viva Preparation Guide
 
-**Target Audience:** Kalvium Project Assessor, Systems Architects, Backend & Frontend Engineers, DevOps Engineers  
-**Document Version:** 1.0.0  
-**Repository:** [https://github.com/bhavanaaa-1/fridge-police](https://github.com/bhavanaaa-1/fridge-police)  
-**Live Frontend:** [https://fridge-police.vercel.app](https://fridge-police.vercel.app)  
-**Live Backend API:** [https://fridge-police.onrender.com](https://fridge-police.onrender.com)  
-**Live API Health Check:** [https://fridge-police.onrender.com/api/health](https://fridge-police.onrender.com/api/health)  
+**Project Name:** FridgePolice
+**Document Version:** 2.0 (Viva Edition)
+**Target Audience:** Students, Viva Examiners, Project Evaluators
+**Repository:** [https://github.com/bhavanaaa-1/fridge-police](https://github.com/bhavanaaa-1/fridge-police)
+**Live Frontend:** [https://fridge-police.vercel.app](https://fridge-police.vercel.app)
+**Live Backend API:** [https://fridge-police.onrender.com](https://fridge-police.onrender.com)
 
 ---
 
 ## Table of Contents
-1. [Section 1: System Architecture](#section-1-system-architecture)
-2. [Section 2: API Documentation](#section-2-api-documentation)
-3. [Section 3: Database Design](#section-3-database-design)
-4. [Section 4: Deployment Documentation](#section-4-deployment-documentation)
-5. [Section 5: Codebase Structure](#section-5-codebase-structure)
+1. [Core Technical Concept Explanations (Viva Format)](#1-core-technical-concept-explanations-viva-format)
+2. [Project Codebase Directory Structure](#2-project-codebase-directory-structure)
+3. [Frontend Implementation Details](#3-frontend-implementation-details)
+4. [Backend Implementation Details](#4-backend-implementation-details)
+5. [Database & Concurrency Design](#5-database--concurrency-design)
+6. [Testing Approach (66 Integration Tests)](#6-testing-approach-66-integration-tests)
+7. [Deployment & Reverse Proxy Setup](#7-deployment--reverse-proxy-setup)
+8. [Frequently Asked Viva Questions & Model Answers](#8-frequently-asked-viva-questions--model-answers)
 
 ---
 
-## Section 1: System Architecture
+## 1. Core Technical Concept Explanations (Viva Format)
 
-FridgePolice is an enterprise-grade communal refrigerator inventory management platform built as a decoupled, multi-tenant cloud application. The architecture cleanly separates presentation, business logic execution, and relational data persistence.
-
-```mermaid
-graph TD
-    subgraph Client_Tier ["Presentation Tier (Browser & CDN)"]
-        ClientBrowser["Web Browser (Desktop / Mobile)"]
-        VercelCDN["Vercel Global Edge Network<br/>(Hosts React 19 + Vite SPA)"]
-    end
-
-    subgraph App_Tier ["Application Tier (Render Container)"]
-        RenderService["Render Web Service (Linux Container)<br/>Node.js 20+ Runtime"]
-        ExpressRouter["Express 5 Router Pipeline<br/>(Security Headers, JSON 10KB Parser)"]
-        AuthLayer["Auth & Role Guard Middlewares<br/>(JWT HS256, Fridge RBAC)"]
-        DomainServices["Domain Services Layer<br/>(Inventory, Requests, Discovery)"]
-        PrismaAdapter["Prisma 7 Client Engine<br/>(@prisma/adapter-pg)"]
-    end
-
-    subgraph Data_Tier ["Data Persistence Tier (Neon Serverless Cloud)"]
-        PgBouncerPooler["Neon PgBouncer Connection Pooler<br/>(DATABASE_URL - Port 5432 / Pooled)"]
-        DirectPostgresInstance["PostgreSQL 16 Database Cluster<br/>(DATABASE_URL_UNPOOLED - Direct DDL)"]
-    end
-
-    ClientBrowser -->|"1. Static Assets (HTTPS)"| VercelCDN
-    ClientBrowser -->|"2. REST Calls (/api/*)"| RenderService
-    RenderService --> ExpressRouter
-    ExpressRouter --> AuthLayer
-    AuthLayer --> DomainServices
-    DomainServices --> PrismaAdapter
-    PrismaAdapter -->|"Runtime Pooled Transactions"| PgBouncerPooler
-    PgBouncerPooler --> DirectPostgresInstance
-    RenderService -.->|"Schema Migrations (Direct Session Locks)"| DirectPostgresInstance
-```
-
-### 1.1 Architectural Tiers
-1. **Client Tier:** A single-page application built with React 19 and Vite 8. All dynamic data fetching uses standard relative URLs (`/api/...`). Assets are served with immutable caching headers via Vercel's global CDN.
-2. **Application Tier:** An asynchronous Express 5 API running in a container on Render. The server enforces defensive headers (`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`), strict 10 KB body size limits, Zod schema validation, and granular role-based authorization.
-3. **Data Persistence Tier:** A serverless PostgreSQL 16 cluster hosted on Neon. Neon's built-in PgBouncer multiplexes database connections, allowing high concurrent request volume while eliminating PostgreSQL connection starvation.
+### Concept 1: JWT Authentication
+- **What it means:** A JSON Web Token (JWT) is a compact, cryptographically signed token containing user identity claims that proves a user has logged in.
+- **Why we used it:** To maintain stateless authentication across HTTP requests without storing server-side session records in memory or a database.
+- **How FridgePolice uses it:** When a user logs in (`POST /api/auth/login`), the server signs a JWT containing the user's ID (`sub: user.id`) using a secret key (`JWT_SECRET`). The frontend stores it in `sessionStorage` and sends it with every protected API call inside the `Authorization: Bearer <token>` header. The `authenticate` middleware verifies this token before allowing the request to proceed.
 
 ---
 
-## Section 2: API Documentation
+### Concept 2: Password Hashing with bcrypt
+- **What it means:** Hashing is a one-way mathematical function that turns a plaintext password into an irreversible string of characters with a random salt.
+- **Why we used it:** If the database is ever compromised, stored plaintext passwords would be stolen. Hashing protects user credentials.
+- **How FridgePolice uses it:** When a user registers (`POST /api/auth/register`), `bcryptjs.hash(password, 10)` generates a salted hash with 10 rounds of key stretching. When logging in, `bcryptjs.compare(password, user.passwordHash)` checks if the entered password matches the stored hash in constant time to prevent timing attacks.
 
-All API endpoints return standard JSON responses. Success responses follow `{ success: true, ... }`. Error responses follow `{ success: false, message: string, errors?: Array }`.
+---
 
-### 2.1 Authentication & Profile (`/api/auth`)
+### Concept 3: Role-Based Authorization (RBAC)
+- **What it means:** Restricting actions on resources based on the specific role assigned to a user within a group.
+- **Why we used it:** In a shared fridge, regular flatmates should be able to request food, but only fridge managers should be able to approve requests, change settings, or discard items.
+- **How FridgePolice uses it:** Every user enrolled in a fridge has a role in the `FridgeMember` table: `OWNER`, `ADMIN`, or `MEMBER`. The `authorizeFridge(["OWNER", "ADMIN"])` middleware queries this table and blocks unauthorized actions with `HTTP 403 Forbidden`.
 
-#### `POST /api/auth/register`
-- **Description:** Registers a new user account and returns a signed JWT.
-- **Auth:** Public.
-- **Request Body:**
+---
+
+### Concept 4: Request Validation with Zod
+- **What it means:** Schema validation validates incoming data types and formats before any business logic or database queries run.
+- **Why we used it:** Without validation, bad inputs (negative numbers, empty strings, malformed emails) could crash the server or corrupt database records.
+- **How FridgePolice uses it:** We define declarative schemas in `server/src/validators/`. For example, `createItemSchema` ensures that `quantity` is a positive number and `name` is a non-empty string. If validation fails, Zod throws an error that our centralized error handler formats into a clean `HTTP 400 Bad Request` with field-level error messages.
+
+---
+
+### Concept 5: Express Middleware
+- **What it means:** Middleware functions sit in the request-response cycle, receiving `(req, res, next)`. They can inspect, modify, pass along (`next()`), or reject requests.
+- **Why we used it:** To avoid duplicating common code (like token verification, security headers, and error handling) in every single route handler.
+- **How FridgePolice uses it:**
+  - `authenticate.js`: Checks the Bearer token and attaches `req.user`.
+  - `authorizeFridge.js`: Checks fridge role permissions and attaches `req.fridgeRole`.
+  - `errorHandler.js`: Catches errors passed to `next(err)` and returns consistent JSON errors.
+
+---
+
+### Concept 6: REST API Design & HTTP Status Codes
+- **What it means:** REST is an architectural style using standard HTTP verbs (`GET`, `POST`, `PATCH`, `DELETE`) on resource-oriented URLs, returning standardized HTTP status codes.
+- **Why we used it:** It provides a clear, predictable interface for frontend and backend communication.
+- **How FridgePolice uses it:**
+  - `POST /api/fridges/:id/items` $\to$ `201 Created`
+  - `GET /api/fridges/:id/items` $\to$ `200 OK`
+  - `PATCH /api/fridges/:id/items/:itemId` $\to$ `200 OK`
+  - `DELETE /api/fridges/:id/items/:itemId` $\to$ `200 OK`
+  - Validation errors $\to$ `400 Bad Request`
+  - Missing/invalid token $\to$ `401 Unauthorized`
+  - Missing permissions $\to$ `403 Forbidden`
+  - Resource not found $\to$ `404 Not Found`
+  - Duplicate email or stock shortage $\to$ `409 Conflict`
+  - Unhandled server failure $\to$ `500 Internal Server Error`
+
+---
+
+### Concept 7: React State Management (`useState`)
+- **What it means:** A React hook that stores component data and triggers a re-render whenever the data changes.
+- **Why we used it:** To make the user interface reactive to user actions without manual DOM manipulation.
+- **How FridgePolice uses it:** In `src/App.jsx`, `useState` tracks `user`, `token`, `activeFridgeId`, and `currentView` (switching views between `home`, `inventory`, `requests`, `members`, `discover`, and `settings`).
+
+---
+
+### Concept 8: React Side Effects (`useEffect`)
+- **What it means:** A React hook that runs asynchronous code (like fetching data) after a component renders.
+- **Why we used it:** To synchronize our frontend components with the backend API.
+- **How FridgePolice uses it:** In `HomeDashboard.jsx` and `MyRequests.jsx`, `useEffect` calls `loadDashboard()` or `loadRequests()` whenever the active fridge changes, updating state when the API response arrives.
+
+---
+
+### Concept 9: Controlled Form Inputs
+- **What it means:** Form elements whose values are controlled directly by React state rather than the browser DOM.
+- **Why we used it:** It enables instant client-side validation, prevents invalid submissions, and keeps form values predictable.
+- **How FridgePolice uses it:** In the login and item creation modals, each `<input>` has `value={formData.email}` and `onChange={handleChange}` updating state on every keystroke.
+
+---
+
+### Concept 10: Relational Database Design & Foreign Keys
+- **What it means:** Organizing data into tables where rows are related to one another through primary keys and foreign keys.
+- **Why we used it:** To enforce relational integrity and prevent orphan records (for example, food items existing without a fridge).
+- **How FridgePolice uses it:** `FoodItem` has a foreign key `fridgeId` referencing `Fridge.id`. If a fridge is deleted, `onDelete: Cascade` automatically deletes all its food items.
+
+---
+
+### Concept 11: Database Transactions (`prisma.$transaction`)
+- **What it means:** A transaction executes multiple database queries as a single atomic unit of work: all queries succeed together, or all fail and roll back.
+- **Why we used it:** To guarantee that database updates never leave the system in an inconsistent, half-finished state.
+- **How FridgePolice uses it:** When completing a food request, a transaction decrements `FoodItem.quantity`, updates `FoodRequest.status` to `COMPLETED`, and writes an `ActivityLog` entry. If any step fails, all changes are rolled back.
+
+---
+
+### Concept 12: Row-Level Locking (`SELECT ... FOR UPDATE`)
+- **What it means:** A database lock placed on a specific row that prevents any other concurrent transaction from reading or modifying that row until the locking transaction finishes.
+- **Why we used it:** To prevent race conditions where two concurrent requests check available stock at the same time and both think there is enough food.
+- **How FridgePolice uses it:** In `approveRequest`, we run:
+  ```sql
+  SELECT id FROM "FoodItem" WHERE id = :id FOR UPDATE;
+  ```
+  This locks the food item row, reads its current stock, checks all active unexpired reservations, and ensures stock is sufficient before committing the approval.
+
+---
+
+### Concept 13: Serializable Transaction Isolation
+- **What it means:** The highest SQL transaction isolation level, guaranteeing that concurrent transactions execute with the exact same result as if they ran strictly one after another.
+- **Why we used it:** It eliminates dirty reads, non-repeatable reads, and phantom reads during concurrent approvals.
+- **How FridgePolice uses it:** `approveRequest` runs inside `{ isolationLevel: "Serializable" }`. If two transactions conflict, PostgreSQL throws code `P2034`, which our service automatically catches and retries up to 3 times.
+
+---
+
+### Concept 14: Lazy Reservation Expiry
+- **What it means:** Instead of running a background cron worker or timer thread, expiration checks are evaluated on-demand whenever data is queried.
+- **Why we used it:** Background workers on free serverless cloud hosts can go to sleep or suffer cold-start delays. Lazy checking guarantees that no user ever observes an expired reservation.
+- **How FridgePolice uses it:** `expireOverdueReservations(fridgeId)` is called before listing, viewing, approving, or completing requests. It finds all requests where `status = "APPROVED"` and `expiresAt <= NOW()`, marks them `EXPIRED`, and releases their reserved quantity back into available stock.
+
+---
+
+### Concept 15: Vercel API Rewrites (Reverse Proxy)
+- **What it means:** A web server rule that forwards requests matching a path pattern to a different destination server behind the scenes.
+- **Why we used it:** It allows the frontend to call `/api/*` directly on the Vercel domain while Vercel forwards the requests to the Render backend.
+- **How FridgePolice uses it:** `vercel.json` configures:
   ```json
   {
-    "name": "Jane Doe",
-    "email": "jane@example.com",
-    "password": "securePassword123"
+    "rewrites": [
+      {
+        "source": "/api/:path*",
+        "destination": "https://fridge-police.onrender.com/api/:path*"
+      }
+    ]
   }
   ```
-- **Validation Rules:**
-  - `name`: string, min 1 char, trimmed.
-  - `email`: string, RFC-compliant email, converted to lowercase.
-  - `password`: string, min 8 chars.
-- **Responses:**
-  - `201 Created`: `{ "success": true, "token": "...", "user": { "id": "...", "name": "...", "email": "..." } }`
-  - `400 Bad Request`: Validation failure or duplicate email address (`"A user with this email already exists"`).
-
-#### `POST /api/auth/login`
-- **Description:** Authenticates credentials and returns a signed JWT.
-- **Auth:** Public.
-- **Request Body:**
-  ```json
-  {
-    "email": "jane@example.com",
-    "password": "securePassword123"
-  }
-  ```
-- **Responses:**
-  - `200 OK`: `{ "success": true, "token": "...", "user": { "id": "...", "name": "...", "email": "..." } }`
-  - `400 Bad Request`: Validation failure.
-  - `401 Unauthorized`: Invalid credentials.
-
-#### `GET /api/auth/me`
-- **Description:** Returns the authenticated user profile along with active fridge memberships.
-- **Auth:** Bearer JWT required.
-- **Responses:**
-  - `200 OK`: `{ "success": true, "user": { "id": "...", "name": "...", "email": "...", "fridgeMemberships": [...] } }`
-  - `401 Unauthorized`: Missing, invalid, or expired token.
+  Browser requests remain same-origin, eliminating the need for CORS headers and avoiding mixed-content warnings.
 
 ---
 
-### 2.2 Fridge Workspaces & Membership (`/api/fridges`)
-
-#### `POST /api/fridges`
-- **Description:** Provisions a new fridge workspace. The creating user is atomically assigned the `OWNER` role.
-- **Auth:** Bearer JWT required.
-- **Request Body:**
-  ```json
-  {
-    "name": "Flat 42 Kitchen",
-    "description": "Shared apartment fridge",
-    "isDiscoverable": true,
-    "publicFoodPreview": true,
-    "acceptJoinRequests": true,
-    "publicDescription": "Community-friendly fridge in Flat 42",
-    "showMemberCount": true
-  }
-  ```
-- **Responses:**
-  - `201 Created`: `{ "success": true, "fridge": { ... } }`
-  - `400 Bad Request`: Validation failure (name missing or empty).
-
-#### `GET /api/fridges`
-- **Description:** Lists all fridges the authenticated user is currently a member of.
-- **Auth:** Bearer JWT required.
-- **Responses:**
-  - `200 OK`: `{ "success": true, "fridges": [ { "id": "...", "name": "...", "role": "OWNER", ... } ] }`
-
-#### `GET /api/fridges/:fridgeId`
-- **Description:** Retrieves detailed fridge metadata.
-- **Auth:** Bearer JWT required. Role: `OWNER`, `ADMIN`, or `MEMBER`.
-- **Responses:**
-  - `200 OK`: `{ "success": true, "fridge": { ... } }`
-  - `403 Forbidden`: User is not a member of this fridge.
-  - `404 Not Found`: Fridge does not exist.
-
-#### `PATCH /api/fridges/:fridgeId/settings`
-- **Description:** Updates discoverability, preview flags, and public description.
-- **Auth:** Bearer JWT required. Role: `OWNER` or `ADMIN`.
-- **Request Body:**
-  ```json
-  {
-    "name": "Flat 42 Main Fridge",
-    "isDiscoverable": false,
-    "publicFoodPreview": false,
-    "acceptJoinRequests": false
-  }
-  ```
-- **Responses:**
-  - `200 OK`: `{ "success": true, "fridge": { ... } }`
-  - `403 Forbidden`: User does not hold `OWNER` or `ADMIN` role.
-
-#### `GET /api/fridges/:fridgeId/members`
-- **Description:** Lists all members and their roles in this fridge.
-- **Auth:** Bearer JWT required. Role: `OWNER`, `ADMIN`, or `MEMBER`.
-- **Responses:**
-  - `200 OK`: `{ "success": true, "members": [ { "userId": "...", "role": "MEMBER", "user": { "name": "..." } } ] }`
-
-#### `POST /api/fridges/:fridgeId/members`
-- **Description:** Directly adds an existing user to this fridge by email.
-- **Auth:** Bearer JWT required. Role: `OWNER`.
-- **Request Body:**
-  ```json
-  {
-    "email": "roommate@example.com",
-    "role": "MEMBER"
-  }
-  ```
-- **Responses:**
-  - `201 Created`: `{ "success": true, "member": { ... } }`
-  - `403 Forbidden`: Only `OWNER` can directly add members.
-  - `404 Not Found`: No user registered with that email.
-
-#### `GET /api/fridges/:fridgeId/activity`
-- **Description:** Retrieves paginated chronological audit logs for the fridge.
-- **Auth:** Bearer JWT required. Role: `OWNER`, `ADMIN`, or `MEMBER`.
-- **Query Parameters:** `page` (default 1), `limit` (default 20, max 100).
-- **Responses:**
-  - `200 OK`: `{ "success": true, "activity": [...], "pagination": { "page": 1, "limit": 20, "total": 45, "totalPages": 3 } }`
-
----
-
-### 2.3 Inventory Management (`/api/fridges/:fridgeId/items`)
-
-#### `POST /api/fridges/:fridgeId/items`
-- **Description:** Adds a new food item to the fridge inventory.
-- **Auth:** Bearer JWT required. Role: `OWNER` or `ADMIN`.
-- **Request Body:**
-  ```json
-  {
-    "name": "Oat Milk",
-    "category": "Dairy",
-    "quantity": 2.0,
-    "unit": "L",
-    "expiryDate": "2026-11-20T00:00:00.000Z",
-    "notes": "Unsweetened carton on top shelf"
-  }
-  ```
-- **Responses:**
-  - `201 Created`: `{ "success": true, "item": { "id": "...", "name": "Oat Milk", "quantity": "2.00", ... } }`
-  - `400 Bad Request`: Invalid quantity ($\le 0$) or missing required name/unit.
-  - `403 Forbidden`: `MEMBER` role is not permitted to create items.
-
-#### `GET /api/fridges/:fridgeId/items`
-- **Description:** Retrieves paginated inventory items with optional search and category filters.
-- **Auth:** Bearer JWT required. Role: `OWNER`, `ADMIN`, or `MEMBER`.
-- **Query Parameters:**
-  - `search`: string (case-insensitive name substring match)
-  - `category`: string (exact category match)
-  - `page`: integer (default 1)
-  - `limit`: integer (default 10, max 100)
-- **Responses:**
-  - `200 OK`: `{ "success": true, "items": [...], "pagination": { ... } }`
-
-#### `GET /api/fridges/:fridgeId/items/:itemId`
-- **Description:** Retrieves full details for a single inventory item.
-- **Auth:** Bearer JWT required. Role: `OWNER`, `ADMIN`, or `MEMBER`.
-- **Responses:**
-  - `200 OK`: `{ "success": true, "item": { ... } }`
-  - `404 Not Found`: Item does not exist in this fridge.
-
-#### `PATCH /api/fridges/:fridgeId/items/:itemId`
-- **Description:** Updates item attributes or reconciles physical quantity discrepancies.
-- **Auth:** Bearer JWT required. Role: `OWNER` or `ADMIN`.
-- **Request Body:** (at least one field required)
-  ```json
-  {
-    "quantity": 1.5,
-    "notes": "Half a liter consumed offline"
-  }
-  ```
-- **Responses:**
-  - `200 OK`: `{ "success": true, "item": { ... } }`
-  - `403 Forbidden`: Insufficient permissions.
-  - `404 Not Found`: Item not found.
-
-#### `DELETE /api/fridges/:fridgeId/items/:itemId`
-- **Description:** Deletes a food item (e.g., spoiled or discarded) and records an audit log.
-- **Auth:** Bearer JWT required. Role: `OWNER` or `ADMIN`.
-- **Responses:**
-  - `200 OK`: `{ "success": true, "item": { ... } }`
-  - `403 Forbidden`: Insufficient permissions.
-  - `404 Not Found`: Item not found.
-
----
-
-### 2.4 Food Portion Requests (`/api/fridges/:fridgeId/requests`)
-
-#### `POST /api/fridges/:fridgeId/requests`
-- **Description:** Submits a portion request for an available food item.
-- **Auth:** Bearer JWT required. Role: `OWNER`, `ADMIN`, or `MEMBER`.
-- **Request Body:**
-  ```json
-  {
-    "foodItemId": "cuid_xyz123",
-    "requestedQuantity": 1.0,
-    "note": "Using for baking this afternoon"
-  }
-  ```
-- **Responses:**
-  - `201 Created`: `{ "success": true, "request": { "id": "...", "status": "PENDING", ... } }`
-  - `400 Bad Request`: Requested quantity exceeds total recorded stock.
-  - `404 Not Found`: Target item not found in this fridge.
-
-#### `GET /api/fridges/:fridgeId/requests`
-- **Description:** Lists food portion requests in the fridge (auto-sweeps expired reservations first).
-- **Auth:** Bearer JWT required. Role: `OWNER`, `ADMIN`, or `MEMBER`.
-- **Query Parameters:** `status` (`PENDING`, `APPROVED`, `REJECTED`, `CANCELLED`, `EXPIRED`, `COMPLETED`), `requesterId`, `page`, `limit`.
-- **Responses:**
-  - `200 OK`: `{ "success": true, "requests": [...], "pagination": { ... } }`
-  - `403 Forbidden`: `MEMBER` attempting to filter requests by another user's `requesterId`.
-
-#### `PATCH /api/fridges/:fridgeId/requests/:requestId/approve`
-- **Description:** Approves a pending request with row-level locking (`SELECT ... FOR UPDATE`) and `Serializable` isolation. Sets 24-hour expiration.
-- **Auth:** Bearer JWT required. Role: `OWNER` or `ADMIN`.
-- **Responses:**
-  - `200 OK`: `{ "success": true, "request": { "id": "...", "status": "APPROVED", "expiresAt": "...", ... } }`
-  - `409 Conflict`: Request is not `PENDING`, or insufficient unreserved stock exists.
-
-#### `PATCH /api/fridges/:fridgeId/requests/:requestId/reject`
-- **Description:** Rejects a pending request.
-- **Auth:** Bearer JWT required. Role: `OWNER` or `ADMIN`.
-- **Responses:**
-  - `200 OK`: `{ "success": true, "request": { "id": "...", "status": "REJECTED", ... } }`
-  - `409 Conflict`: Only `PENDING` requests can be rejected.
-
-#### `PATCH /api/fridges/:fridgeId/requests/:requestId/cancel`
-- **Description:** Cancels a pending request. Requesters can cancel their own requests; Owners/Admins can cancel any member's request.
-- **Auth:** Bearer JWT required. Role: `OWNER`, `ADMIN`, or `MEMBER`.
-- **Responses:**
-  - `200 OK`: `{ "success": true, "request": { "id": "...", "status": "CANCELLED", ... } }`
-  - `403 Forbidden`: Non-admin attempting to cancel another user's request.
-  - `409 Conflict`: Request is no longer `PENDING`.
-
-#### `PATCH /api/fridges/:fridgeId/requests/:requestId/complete`
-- **Description:** Formally records physical food consumption. Decrements `FoodItem.quantity` by the requested amount and sets status to `COMPLETED`.
-- **Auth:** Bearer JWT required. Role: `OWNER` or `ADMIN`.
-- **Responses:**
-  - `200 OK`: `{ "success": true, "request": { "id": "...", "status": "COMPLETED", ... } }`
-  - `409 Conflict`: Request is not in `APPROVED` status, or reservation has expired.
-
----
-
-### 2.5 Community Discovery & Join Requests (`/api/discover/fridges`)
-
-#### `GET /api/discover/fridges`
-- **Description:** Public directory of discoverable fridges (`isDiscoverable = true`). Returns sanitized public projection.
-- **Auth:** Public.
-- **Query Parameters:** `search`, `page`, `limit`.
-- **Responses:**
-  - `200 OK`: `{ "success": true, "fridges": [ { "id": "...", "name": "...", "publicDescription": "...", "acceptJoinRequests": true } ] }`
-
-#### `GET /api/discover/fridges/:fridgeId`
-- **Description:** Public view of a single discoverable fridge. Displays preview food items if `publicFoodPreview = true`.
-- **Auth:** Optional Bearer token (returns `isMember` and `userRequestStatus` if authenticated).
-- **Responses:**
-  - `200 OK`: `{ "success": true, "fridge": { ... } }`
-  - `404 Not Found`: Fridge not found or marked private.
-
-#### `POST /api/fridges/:fridgeId/join-requests`
-- **Description:** Submits an application to join a public fridge.
-- **Auth:** Bearer JWT required.
-- **Request Body:** `{ "note": "Hi, I live in Flat 4B and would like to share groceries." }`
-- **Responses:**
-  - `201 Created`: `{ "success": true, "request": { ... } }`
-  - `409 Conflict`: User is already a member or has a pending join request.
-
-#### `GET /api/fridges/:fridgeId/join-requests`
-- **Description:** Lists all incoming join requests for this fridge.
-- **Auth:** Bearer JWT required. Role: `OWNER` or `ADMIN`.
-- **Responses:**
-  - `200 OK`: `{ "success": true, "requests": [...] }`
-
-#### `PATCH /api/fridges/:fridgeId/join-requests/:requestId/approve`
-- **Description:** Approves a join request, atomically adding the applicant to `FridgeMember` with role `MEMBER`.
-- **Auth:** Bearer JWT required. Role: `OWNER` or `ADMIN`.
-- **Responses:**
-  - `200 OK`: `{ "success": true, "member": { ... } }`
-
-#### `PATCH /api/fridges/:fridgeId/join-requests/:requestId/reject`
-- **Description:** Rejects a join request.
-- **Auth:** Bearer JWT required. Role: `OWNER` or `ADMIN`.
-- **Responses:**
-  - `200 OK`: `{ "success": true, "request": { ... } }`
-
----
-
-### 2.6 User Dashboard & Requests (`/api/users`)
-
-#### `GET /api/users/me/dashboard`
-- **Description:** Aggregates dashboard metrics for the user across all their fridges (total fridges, pending requests, expiring items).
-- **Auth:** Bearer JWT required.
-- **Responses:**
-  - `200 OK`: `{ "success": true, "fridgesCount": 2, "pendingRequestsCount": 1, ... }`
-
-#### `GET /api/users/me/requests`
-- **Description:** Retrieves all food requests associated with the user across all fridges.
-- **Auth:** Bearer JWT required.
-- **Responses:**
-  - `200 OK`: `{ "success": true, "myRequests": [...], "requestsToReview": [...] }`
-
-#### `GET /api/users/me/join-requests`
-- **Description:** Lists join requests submitted by the authenticated user.
-- **Auth:** Bearer JWT required.
-
-#### `PATCH /api/users/me/join-requests/:requestId/cancel`
-- **Description:** Cancels an outgoing join request previously submitted by the user.
-- **Auth:** Bearer JWT required.
-
----
-
-### 2.7 System Health Check (`/api/health`)
-
-#### `GET /api/health`
-- **Description:** Operational liveness probe for load balancers and deployment monitoring.
-- **Auth:** Public.
-- **Responses:**
-  - `200 OK`: `{ "success": true, "message": "FridgePolice API is running!" }`
-
----
-
-## Section 3: Database Design
-
-The persistence tier runs on PostgreSQL 16 managed by Neon. Schema migrations and models are managed using Prisma 7.
-
-```mermaid
-erDiagram
-    User ||--o{ FridgeMember : "has"
-    User ||--o{ FoodItem : "created"
-    User ||--o{ FoodRequest : "requested"
-    User ||--o{ FoodRequest : "approved"
-    User ||--o{ MembershipRequest : "submitted"
-    User ||--o{ MembershipRequest : "decided"
-    User ||--o{ ActivityLog : "acted"
-
-    Fridge ||--o{ FridgeMember : "enrolled"
-    Fridge ||--o{ FoodItem : "contains"
-    Fridge ||--o{ FoodRequest : "hosts"
-    Fridge ||--o{ MembershipRequest : "received"
-    Fridge ||--o{ ActivityLog : "recorded"
-
-    FoodItem ||--o{ FoodRequest : "demanded"
-
-    User {
-        String id PK "cuid()"
-        String name "VarChar"
-        String email UK "VarChar (unique)"
-        String passwordHash "VarChar (bcrypt 60 chars)"
-        DateTime createdAt "DEFAULT now()"
-        DateTime updatedAt "updatedAt"
-    }
-
-    Fridge {
-        String id PK "cuid()"
-        String name "VarChar"
-        String description "VarChar (nullable)"
-        Boolean isDiscoverable "DEFAULT false"
-        Boolean publicFoodPreview "DEFAULT false"
-        Boolean acceptJoinRequests "DEFAULT false"
-        String publicDescription "VarChar (nullable)"
-        Boolean showMemberCount "DEFAULT false"
-        DateTime createdAt "DEFAULT now()"
-        DateTime updatedAt "updatedAt"
-    }
-
-    FridgeMember {
-        String userId PK, FK "references User.id"
-        String fridgeId PK, FK "references Fridge.id"
-        FridgeRole role "ENUM: OWNER, ADMIN, MEMBER"
-        DateTime joinedAt "DEFAULT now()"
-    }
-
-    FoodItem {
-        String id PK "cuid()"
-        String fridgeId FK "references Fridge.id"
-        String name "VarChar"
-        String category "VarChar (nullable)"
-        Decimal quantity "Decimal(10, 2)"
-        String unit "VarChar"
-        DateTime expiryDate "DateTime (nullable)"
-        String notes "VarChar (nullable)"
-        String createdById FK "references User.id"
-        DateTime createdAt "DEFAULT now()"
-        DateTime updatedAt "updatedAt"
-    }
-
-    FoodRequest {
-        String id PK "cuid()"
-        String foodItemId FK "references FoodItem.id"
-        String requesterId FK "references User.id"
-        Decimal requestedQuantity "Decimal(10, 2)"
-        RequestStatus status "ENUM: PENDING, APPROVED, REJECTED, CANCELLED, EXPIRED, COMPLETED"
-        String note "VarChar (nullable)"
-        String approvedById FK "references User.id (nullable)"
-        DateTime expiresAt "DateTime (nullable, +24h on approval)"
-        DateTime decidedAt "DateTime (nullable)"
-        DateTime createdAt "DEFAULT now()"
-        DateTime updatedAt "updatedAt"
-    }
-
-    MembershipRequest {
-        String id PK "cuid()"
-        String fridgeId FK "references Fridge.id"
-        String userId FK "references User.id"
-        MembershipRequestStatus status "ENUM: PENDING, APPROVED, REJECTED, CANCELLED"
-        String note "VarChar (nullable)"
-        String decidedById FK "references User.id (nullable)"
-        DateTime decidedAt "DateTime (nullable)"
-        DateTime createdAt "DEFAULT now()"
-        DateTime updatedAt "updatedAt"
-    }
-
-    ActivityLog {
-        String id PK "cuid()"
-        String fridgeId FK "references Fridge.id"
-        String actorId FK "references User.id (nullable)"
-        String action "VarChar"
-        String entityType "VarChar"
-        String entityId "VarChar (nullable)"
-        Json details "Json (nullable)"
-        DateTime createdAt "DEFAULT now()"
-    }
-```
-
-### 3.1 Enumerations
-1. **`FridgeRole`**: `OWNER` (full administrative rights), `ADMIN` (inventory and request management), `MEMBER` (request submission and inventory viewing).
-2. **`RequestStatus`**: `PENDING`, `APPROVED`, `REJECTED`, `CANCELLED`, `EXPIRED`, `COMPLETED`.
-3. **`MembershipRequestStatus`**: `PENDING`, `APPROVED`, `REJECTED`, `CANCELLED`.
-
-### 3.2 Indexing Strategy
-- **`Fridge`**: Index on `[isDiscoverable]` for high-performance public directory searches.
-- **`FridgeMember`**: Primary composite key `[userId, fridgeId]`; individual indexes on `[fridgeId]` and `[userId]`.
-- **`FoodItem`**: Indexes on `[fridgeId]` and `[createdById]` for fast inventory filtering.
-- **`FoodRequest`**: Indexes on `[foodItemId]`, `[requesterId]`, `[status]`, and `[createdAt]` for sub-millisecond status lookups and lazy-expiry scans.
-- **`ActivityLog`**: Indexes on `[fridgeId]`, `[actorId]`, and `[createdAt]` for chronological timeline rendering.
-- **`MembershipRequest`**: Indexes on `[fridgeId]`, `[userId]`, `[status]`, and `[createdAt]`.
-
-### 3.3 Referential Actions (Cascades)
-- **`onDelete: Cascade`**: `FridgeMember` cascades with User/Fridge; `FoodItem` cascades with Fridge; `FoodRequest` cascades with FoodItem and requester User; `MembershipRequest` cascades with Fridge and User; `ActivityLog` cascades with Fridge.
-- **`onDelete: Restrict`**: `FoodItem.createdById` prevents accidental deletion of a User while their items remain recorded.
-- **`onDelete: SetNull`**: `FoodRequest.approvedById`, `MembershipRequest.decidedById`, and `ActivityLog.actorId` preserve historical and financial audit integrity if an administrative user is deleted.
-
----
-
-## Section 4: Deployment Documentation
-
-FridgePolice is deployed in production across three independent, purpose-built cloud services:
-
-| Component | Platform | URL / Endpoint | Deployment Method |
-| :--- | :--- | :--- | :--- |
-| **Frontend SPA** | Vercel | [https://fridge-police.vercel.app](https://fridge-police.vercel.app) | Git integration on `main` branch |
-| **Backend API** | Render | [https://fridge-police.onrender.com](https://fridge-police.onrender.com) | Containerized web service |
-| **Database** | Neon Cloud | AWS Region (`us-east-1` / `eu-central-1`) | Managed Serverless PostgreSQL 16 |
-
----
-
-### 4.1 Render Backend Service Configuration
-- **Environment:** Node
-- **Root Directory:** `server`
-- **Build Command:** `npm install && npm run db:generate`
-- **Start Command:** `npm start`
-- **Health Check Path:** `/api/health`
-- **Host Binding:** `0.0.0.0` (listening on `process.env.PORT`)
-- **Auto-Deploy:** Enabled on pushes to GitHub `main`.
-
----
-
-### 4.2 Production Environment Variables
-
-| Variable Name | Required By | Environment | Description & Example Format |
-| :--- | :--- | :--- | :--- |
-| `PORT` | Render / Express | Render | The port Express listens on (dynamically set by Render, e.g., `10000`, local default `5000`). |
-| `DATABASE_URL` | Express / Prisma Runtime | Render, Local | Neon **pooled** connection string (via PgBouncer). <br/>`postgresql://user:pass@ep-host-pooler.region.aws.neon.tech/neondb?sslmode=require` |
-| `DATABASE_URL_UNPOOLED` | Prisma CLI Migrations | Render, Local | Neon **direct** connection string without pooling. Required for `prisma migrate` DDL lock commands. <br/>`postgresql://user:pass@ep-host.region.aws.neon.tech/neondb?sslmode=require` |
-| `JWT_SECRET` | Auth Token Service | Render, Local | Cryptographic secret for signing JWTs. Must be $\ge 32$ random characters. Server refuses to boot if insecure. |
-| `JWT_EXPIRES_IN` | Auth Token Service | Render, Local | Expiration lifetime for issued tokens (e.g., `1d` for 24 hours). |
-| `PRISMA_TRANSACTION_TIMEOUT` | Prisma Client | Render (optional) | Transaction timeout override in milliseconds (defaults to 25,000 ms in test/remote environments). |
-| `TEST_DATABASE_URL` | Integration Tests | Test runner | Neon test branch pooled URL used by `server/tests/*.mjs`. |
-| `TEST_DATABASE_URL_UNPOOLED` | Integration Tests | Test runner | Neon test branch unpooled URL for running migrations against test database. |
-
----
-
-### 4.3 Database Migration Execution
-In production, schema migrations should be applied using the unpooled direct connection:
-```bash
-cd server
-npx prisma migrate deploy
-```
-This runs all pending migration files located in `server/prisma/migrations/` sequentially inside transactions without locking conflicts from PgBouncer.
-
----
-
-## Section 5: Codebase Structure
-
-The repository is structured as a clear, maintainable monorepo:
+## 2. Project Codebase Directory Structure
 
 ```
 fridge-police/
-|-- .env.example                     # Example environment variables for local development
-|-- .gitignore                       # Git exclusion rules (node_modules, .env*, build artifacts)
-|-- .oxlintrc.json                   # Oxlint configuration for ultra-fast static analysis
-|-- Changes.md                       # Deep-dive on Kalvium Challenge #8 engineering solutions
-|-- HLD.md                           # High-Level Design document
-|-- LLD.md                           # Low-Level Design document
-|-- PRD.md                           # Product Requirements Document
-|-- README.md                        # Master project README
-|-- index.html                       # Single Page Application HTML host file
-|-- neon.ts                          # Neon database configuration helper
-|-- package.json                     # Frontend dependencies & workspace scripts
-|-- package-lock.json                # Locked frontend dependency tree
-|-- vite.config.js                   # Vite bundler configuration & local dev proxy
+|-- README.md                    # Main project overview and setup guide
+|-- PRD.md                       # Product requirements and user workflows
+|-- HLD.md                       # High-level architecture and component design
+|-- LLD.md                       # Low-level design, database schema, and APIs
+|-- vercel.json                  # Reverse proxy rewrite from Vercel to Render backend
+|-- package.json                 # Frontend dependencies (React 19, Vite 8, Oxlint)
+|-- vite.config.js               # Vite development server config with local /api proxy
 |-- docs/
-|   `-- TECHNICAL_DOCUMENTATION.md   # This comprehensive architectural reference
-|-- public/
-|   `-- favicon.svg                  # Application branding icon
-|-- src/                             # React 19 Frontend Application
-|   |-- App.css                      # Application component styles & design tokens
-|   |-- App.jsx                      # Root application shell, state router, toasts
-|   |-- index.css                    # Global CSS variables & Tailwind-style utilities
-|   |-- main.jsx                     # DOM root bootstrapping
-|   |-- assets/
-|   |   |-- hero.png                 # Hero refrigerator illustration
-|   |   |-- react.svg                # React logo
-|   |   `-- vite.svg                 # Vite logo
+|   `-- TECHNICAL_DOCUMENTATION.md # This viva and technical guide
+|-- src/                         # Frontend Application Source Code
+|   |-- main.jsx                 # React root entry point
+|   |-- App.jsx                  # Main view router, state coordinator, toast alerts
+|   |-- App.css / index.css      # CSS design tokens, typography, dark mode rules
 |   |-- components/
-|   |   |-- ActivityFeed.jsx         # Chronological audit log timeline component
-|   |   |-- CreateFridgeModal.jsx    # Modal dialog to create new fridge workspace
-|   |   |-- Discover.jsx             # Public community fridge directory & join modal
-|   |   |-- HomeDashboard.jsx        # Stats overview, active fridge selector, quick cards
-|   |   |-- Icons.jsx                # Handcrafted Lucide-style SVG icon components
-|   |   |-- MyFridges.jsx            # Multi-fridge switcher & membership manager
-|   |   |-- MyRequests.jsx           # Request management tabs (Submitted vs. Review)
-|   |   |-- Navigation.jsx           # Responsive sidebar, user badge, dark mode switch
-|   |   `-- Settings.jsx             # Fridge privacy settings & discoverability toggles
+|   |   |-- HomeDashboard.jsx    # Overview dashboard, stats cards, quick item view
+|   |   |-- MyFridges.jsx        # Multi-fridge switcher and role badge
+|   |   |-- MyRequests.jsx       # Tabbed request view (My Requests vs To Review)
+|   |   |-- Discover.jsx         # Public community fridge directory & join modal
+|   |   |-- ActivityFeed.jsx     # Chronological audit timeline component
+|   |   |-- Settings.jsx         # Fridge privacy and join permissions settings
+|   |   |-- Navigation.jsx       # Sidebar, profile badge, dark mode toggle
+|   |   |-- CreateFridgeModal.jsx# Modal to provision new fridge workspace
+|   |   `-- Icons.jsx            # SVG icon components
 |   `-- lib/
-|       `-- api.js                   # Unified fetch API client with 401 interception
-`-- server/                          # Node.js Express 5 REST API Backend
-    |-- .env.example                 # Example server environment variables
-    |-- package.json                 # Backend dependencies (Express, Prisma, bcrypt, zod)
-    |-- package-lock.json            # Locked backend dependency tree
-    |-- prisma.config.ts             # Prisma 7 configuration file
+|       `-- api.js               # Reusable fetch client with auth token injection
+`-- server/                      # Backend Application Source Code
+    |-- package.json             # Backend dependencies (Express 5, Prisma 7, Zod, bcrypt)
+    |-- prisma.config.ts         # Prisma 7 configuration file
     |-- prisma/
-    |   |-- schema.prisma            # Declarative PostgreSQL schema & indexes
-    |   `-- migrations/              # Chronological SQL migration files
-    |-- generated/
-    |   `-- prisma/                  # Generated Prisma Client runtime types
+    |   |-- schema.prisma        # Relational schema definition (PostgreSQL)
+    |   `-- migrations/          # Chronological SQL migration files
     |-- src/
-    |   |-- app.js                   # Express app setup, security headers, middleware stack
-    |   |-- server.js                # Server entry point, 0.0.0.0 binding, JWT startup check
-    |   |-- controllers/
-    |   |   |-- auth.controller.js       # Register, login, me endpoints
-    |   |   |-- fridge.controller.js     # Fridge, member, join, discovery endpoints
-    |   |   |-- health.controller.js     # Health probe endpoint
-    |   |   |-- inventory.controller.js  # Item CRUD endpoints
-    |   |   `-- request.controller.js    # Request lifecycle endpoints
+    |   |-- server.js            # Entry point: checks JWT_SECRET and starts listener
+    |   |-- app.js               # Express application pipeline & security headers
     |   |-- lib/
-    |   |   `-- prisma.js                # Reusable Prisma client with @prisma/adapter-pg
+    |   |   `-- prisma.js        # Prisma client singleton with adapter-pg
     |   |-- middleware/
-    |   |   |-- authenticate.js          # JWT verification & optional auth middlewares
-    |   |   |-- authorizeFridge.js       # Per-fridge RBAC authorization guard
-    |   |   |-- errorHandler.js          # Centralized error handler & Zod formatter
-    |   |   `-- notFound.js              # Catch-all 404 handler
+    |   |   |-- authenticate.js  # JWT Bearer token verification
+    |   |   |-- authorizeFridge.js # Per-fridge role check (RBAC)
+    |   |   |-- errorHandler.js  # Centralized error handler
+    |   |   `-- notFound.js      # 404 handler for unknown routes
     |   |-- routes/
-    |   |   |-- auth.routes.js           # Auth route declarations
-    |   |   |-- discover.routes.js       # Public discovery route declarations
-    |   |   |-- fridge.routes.js         # Fridge workspace route declarations
-    |   |   |-- health.routes.js         # Health route declarations
-    |   |   |-- inventory.routes.js      # Inventory route declarations
-    |   |   |-- request.routes.js        # Request lifecycle route declarations
-    |   |   `-- user.routes.js           # User dashboard & join request route declarations
+    |   |   |-- auth.routes.js   # /api/auth routes (register, login, me)
+    |   |   |-- fridge.routes.js # /api/fridges routes
+    |   |   |-- inventory.routes.js # /api/fridges/:id/items routes
+    |   |   |-- request.routes.js# /api/fridges/:id/requests routes
+    |   |   |-- discover.routes.js # /api/discover/fridges routes
+    |   |   |-- user.routes.js   # /api/users routes (dashboard, my requests)
+    |   |   `-- health.routes.js # /api/health liveness probe
+    |   |-- controllers/
+    |   |   |-- auth.controller.js
+    |   |   |-- fridge.controller.js
+    |   |   |-- inventory.controller.js
+    |   |   |-- request.controller.js
+    |   |   `-- health.controller.js
     |   |-- services/
-    |   |   |-- auth.service.js          # Authentication, password hashing, JWT signing
-    |   |   |-- fridge.service.js        # Fridge domain logic & public projection filtering
-    |   |   |-- inventory.service.js     # Inventory CRUD & audit trail logging
-    |   |   `-- request.service.js       # Concurrency locks, 24h expiration, completions
+    |   |   |-- auth.service.js
+    |   |   |-- fridge.service.js
+    |   |   |-- inventory.service.js
+    |   |   `-- request.service.js
     |   |-- utils/
-    |   |   `-- token.js                 # JWT sign and verify helpers
+    |   |   `-- token.js         # signToken & verifyToken helpers
     |   `-- validators/
-    |       |-- auth.validator.js        # Zod validation schemas for auth
-    |       |-- fridge.validator.js      # Zod validation schemas for fridges & join requests
-    |       |-- inventory.validator.js   # Zod validation schemas for food items
-    |       `-- request.validator.js     # Zod validation schemas for food requests
-    `-- tests/                       # Automated Integration Test Suite (66 tests)
-        |-- auth.test.mjs                    # Authentication, registration, JWT tests
-        |-- discovery-and-membership.test.mjs# Public discovery & privacy projection tests
-        |-- email-validation.test.mjs        # Email RFC normalization & password rules
-        |-- inventory.test.mjs               # Item CRUD, pagination, search, category tests
-        |-- request.test.mjs                 # Concurrency locks, 24h auto-expiry tests
-        `-- security.test.mjs                # Multi-tenant isolation & privilege escalation tests
+    |       |-- auth.validator.js
+    |       |-- fridge.validator.js
+    |       |-- inventory.validator.js
+    |       `-- request.validator.js
+    `-- tests/                   # Automated Integration Tests
+        |-- auth.test.mjs
+        |-- discovery-and-membership.test.mjs
+        |-- email-validation.test.mjs
+        |-- inventory.test.mjs
+        |-- request.test.mjs
+        `-- security.test.mjs
 ```
+
+---
+
+## 3. Frontend Implementation Details
+
+### State-Based View Switching (No External Router Needed)
+Instead of adding heavy external routing dependencies, `src/App.jsx` uses a simple state variable:
+```javascript
+const [currentView, setCurrentView] = useState("home");
+```
+When the user clicks a navigation link in `Navigation.jsx`, `setCurrentView("inventory")` updates the state, and `App.jsx` conditionally renders `<HomeDashboard />`, `<MyRequests />`, or `<Discover />`.
+
+### Centralized API Client (`src/lib/api.js`)
+All HTTP calls pass through `apiRequest(path, options)`:
+- Sets `Content-Type: application/json`.
+- Automatically attaches `Authorization: Bearer ${token}` if a token exists in `sessionStorage`.
+- Automatically catches `401 Unauthorized` responses, clears the invalid token, and prompts the user to log in again.
+- Formats Zod validation errors into accessible field error lists for display in forms.
+
+---
+
+## 4. Backend Implementation Details
+
+### Layered Separation of Concerns
+1. **Routes (`routes/*.routes.js`):** Defines the URL path, HTTP method, and middleware chain.
+2. **Middleware (`middleware/*.js`):** Enforces JWT authentication and fridge membership/role checks.
+3. **Controllers (`controllers/*.controller.js`):** Parses parameters, calls Zod schemas (`.parse()`), and invokes services.
+4. **Services (`services/*.service.js`):** Implements business logic, concurrency control, and database transactions.
+5. **Database (`lib/prisma.js`):** Reusable Prisma client configured with Neon PostgreSQL connection pooling.
+
+---
+
+## 5. Database & Concurrency Design
+
+### Prisma Schema Entities
+- **`User`**: `id`, `name`, `email` (unique), `passwordHash`, timestamps.
+- **`Fridge`**: `id`, `name`, `description`, `isDiscoverable`, `publicFoodPreview`, `acceptJoinRequests`, `publicDescription` (up to 1,000 characters), `showMemberCount`.
+- **`FridgeMember`**: `userId`, `fridgeId`, `role` (`OWNER`, `ADMIN`, `MEMBER`), `joinedAt`.
+- **`FoodItem`**: `id`, `fridgeId`, `name`, `category`, `quantity` (`Decimal(10, 2)`), `unit`, `expiryDate`, `notes`, `createdById`.
+- **`FoodRequest`**: `id`, `foodItemId`, `requesterId`, `requestedQuantity`, `status` (`PENDING`, `APPROVED`, `REJECTED`, `CANCELLED`, `EXPIRED`, `COMPLETED`), `note`, `approvedById`, `expiresAt`, `decidedAt`.
+- **`MembershipRequest`**: `id`, `fridgeId`, `userId`, `status` (`PENDING`, `APPROVED`, `REJECTED`, `CANCELLED`), `note`, `decidedById`.
+- **`ActivityLog`**: `id`, `fridgeId`, `actorId`, `action`, `entityType`, `entityId`, `details` (JSON), `createdAt`.
+
+---
+
+## 6. Testing Approach (66 Integration Tests)
+
+We verify our backend logic with 66 automated integration tests using Node.js's native test runner (`node --test tests/**/*.mjs`):
+
+1. **`auth.test.mjs` (14 tests):** Tests user registration, duplicate email rejection (HTTP 409), password hashing, login token generation, invalid password rejection, and role enforcement.
+2. **`email-validation.test.mjs` (11 tests):** Tests RFC email validation, uppercase-to-lowercase normalization, dots, plus signs, whitespace trimming, and minimum 8-character password length.
+3. **`inventory.test.mjs` (14 tests):** Tests creating items, non-member denial, owner/admin permissions, decimal quantities, pagination, search filtering, and deletion activity logs.
+4. **`request.test.mjs` (15 tests):** Tests submitting portion requests, approving, rejecting, cancelling, completing consumption, 24-hour expiration freeing stock, and concurrent approvals preventing overbooking.
+5. **`discovery-and-membership.test.mjs` (5 tests):** Tests public fridge directory filtering, join request creation, and approval adding members.
+6. **`security.test.mjs` (7 tests):** Tests multi-tenant isolation (user cannot read or edit another fridge's items), malformed token rejection, and transaction rollback on error.
+
+To run tests:
+```bash
+cd server
+npm test
+```
+
+---
+
+## 7. Deployment & Reverse Proxy Setup
+
+### Vercel (Frontend)
+- Continuous deployment from the `main` branch.
+- Build command: `npm run build` (`vite build`).
+- Output directory: `dist/`.
+- Reverse proxy rule in `vercel.json`:
+  ```json
+  {
+    "rewrites": [
+      {
+        "source": "/api/:path*",
+        "destination": "https://fridge-police.onrender.com/api/:path*"
+      }
+    ]
+  }
+  ```
+
+### Render (Backend)
+- Deployed as a Node Web Service.
+- Root directory: `server`.
+- Build command: `npm install && npm run db:generate`.
+- Start command: `npm start`.
+- Binds to host `0.0.0.0` and port `process.env.PORT`.
+- Liveness health check: `/api/health`.
+
+### Neon (PostgreSQL Database)
+- `DATABASE_URL`: Pooled connection string using PgBouncer for high-concurrency runtime queries.
+- `DATABASE_URL_UNPOOLED`: Direct connection string for Prisma migrations (`npx prisma migrate deploy`).
+
+---
+
+## 8. Frequently Asked Viva Questions & Model Answers
+
+### Q1: What is the main problem FridgePolice solves?
+**Answer:** It coordinates shared refrigerator usage in shared apartments and student hostels. It provides clear visibility into what food is available, enables fair portion requests, prevents two people from claiming the same food using database row locking, automatically releases forgotten reservations after 24 hours, and keeps an activity log when food is eaten offline.
+
+### Q2: How does FridgePolice prevent two people from taking the last item simultaneously?
+**Answer:** In `approveRequest`, we start a database transaction with `Serializable` isolation and issue a row lock: `SELECT id FROM "FoodItem" WHERE id = :id FOR UPDATE`. This locks the food item row. We then calculate `Available = Total Quantity - Active Approved Reservations`. If the requested amount is greater than available stock, the approval is rejected with `HTTP 409 Conflict`. If a serialization conflict occurs, our backend retries up to 3 times before failing safely.
+
+### Q3: Why does your application use Vercel rewrites instead of CORS headers?
+**Answer:** Because the frontend calls `/api/*` on `https://fridge-police.vercel.app`, Vercel's edge network proxies the request directly to Render behind the scenes. From the browser's view, all requests are strictly same-origin. This avoids CORS preflight requests, eliminates cross-origin header issues, and ensures authentication headers are forwarded securely.
+
+### Q4: How is reservation expiration handled? Is there a cron job?
+**Answer:** No background cron job is needed. We use lazy evaluation. Whenever requests are listed, viewed, approved, or completed, `expireOverdueReservations()` runs first. It queries requests with `status = "APPROVED"` where `expiresAt <= NOW()`, updates their status to `EXPIRED`, and logs the event. This guarantees that no user ever sees or is blocked by an expired reservation, without wasting server resources on idle polling.
+
+### Q5: How do you handle password security?
+**Answer:** Passwords are never stored in plaintext. During registration, we use `bcryptjs` with 10 salt rounds to hash the password before saving it to PostgreSQL. When logging in, `bcryptjs.compare` verifies the entered password against the stored hash in constant time.
