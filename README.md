@@ -267,7 +267,6 @@ Backend (Render):
 
 ```
 fridge-police/
-|-- Changes.md                       # Deep-dive on Kalvium Challenge #8 engineering solutions
 |-- HLD.md                           # High-Level Design document
 |-- LLD.md                           # Low-Level Design document
 |-- PRD.md                           # Product Requirements Document
