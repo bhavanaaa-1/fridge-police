@@ -82,7 +82,7 @@ flowchart TD
         VercelRewrite["Vercel API Rewrite<br/>(/api/:path* -> Render)"]
     end
 
-    subgraph Render ["Render Container"]
+    subgraph Render ["Render Web Service"]
         ExpressAPI["Express 5 REST API<br/>(Auth, RBAC, Validation, Controllers)"]
     end
 
@@ -230,7 +230,7 @@ node --test tests/auth.test.mjs
 ## Deployment Summary
 
 - **Frontend (Vercel):** Hosted as a static build from the repository root. `vercel.json` rewrites all `/api/*` traffic to `https://fridge-police.onrender.com/api/:path*`, so browser requests stay same-origin.
-- **Backend (Render):** Express server running in a Node.js container with root directory set to `server`. Start command is `npm start` and health check path is `/api/health`. Express listens via `app.listen(PORT)` on `process.env.PORT`.
+- **Backend (Render):** Express web service running on Node.js with root directory set to `server`. Start command is `npm start` and health check path is `/api/health`. Express listens via `app.listen(PORT)` on `process.env.PORT`.
 - **Database (Neon):** Managed serverless PostgreSQL 16. Uses pooled connections (PgBouncer) for web requests and direct connections for Prisma CLI migrations. Express does not run migrations.
 
 ---

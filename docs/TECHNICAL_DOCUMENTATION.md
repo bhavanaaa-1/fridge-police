@@ -31,9 +31,9 @@
 ---
 
 ### Concept 2: Password Hashing with bcrypt
-- **What it means:** Hashing is a one-way mathematical function that turns a plaintext password into an irreversible string of characters with a random salt.
-- **Why we used it:** If the database is ever compromised, stored plaintext passwords would be stolen. Hashing protects user credentials.
-- **How FridgePolice uses it:** When a user registers (`POST /api/auth/register`), `bcryptjs.hash(password, 10)` generates a salted hash with 10 rounds of key stretching. When logging in, `bcryptjs.compare(password, user.passwordHash)` checks if the entered password matches the stored hash in constant time to prevent timing attacks.
+- **What it means:** Hashing is a one-way mathematical function that turns a plaintext password into an irreversible string of characters using a random salt.
+- **Why we used it:** If the database is ever compromised, stored plaintext passwords would be exposed. Hashing protects user credentials.
+- **How FridgePolice uses it:** When a user registers (`POST /api/auth/register`), `bcryptjs.hash(password, 10)` generates a salted hash with 10 rounds of key stretching before storing it in PostgreSQL. When logging in (`POST /api/auth/login`), `bcryptjs.compare(password, user.passwordHash)` compares the entered password against the stored hash.
 
 ---
 
@@ -132,9 +132,9 @@
 ---
 
 ### Concept 14: Lazy Reservation Expiry
-- **What it means:** Instead of running a background cron worker or timer thread, expiration checks are evaluated on-demand whenever data is queried.
-- **Why we used it:** Background workers on free serverless cloud hosts can go to sleep or suffer cold-start delays. Lazy checking guarantees that no user ever observes an expired reservation, without running an unnecessary background scheduler.
-- **How FridgePolice uses it:** `expireOverdueReservations(fridgeId)` is called before listing, viewing, approving, or completing requests. It finds all requests where `status = "APPROVED"` and `expiresAt <= NOW()`, marks them `EXPIRED`, and releases their reserved quantity back into available stock.
+- **What it means:** Instead of running a background cron worker or timer thread, expiration checks are evaluated on-demand when relevant API operations are executed.
+- **Why we used it:** Running checks on-demand avoids the operational overhead and complexity of managing a separate background scheduler or worker process.
+- **How FridgePolice uses it:** Expiration checks run on-demand when relevant API operations invoke `expireOverdueReservations(fridgeId)` (such as when listing, viewing, approving, or completing food requests). It queries requests with `status = "APPROVED"` and `expiresAt <= NOW()`, marks them `EXPIRED`, and releases their reserved quantity back into available stock.
 
 ---
 
@@ -349,10 +349,10 @@ npm test
 **Answer:** Because the frontend calls `/api/*` on `https://fridge-police.vercel.app`, Vercel's edge network proxies the request directly to Render behind the scenes. From the browser's view, all requests are strictly same-origin. This avoids CORS preflight requests, eliminates cross-origin header issues, and ensures authentication headers are forwarded securely.
 
 ### Q4: How is reservation expiration handled? Is there a cron job?
-**Answer:** No background cron job or scheduled task is used. We use deterministic lazy evaluation. Whenever requests are listed, viewed, approved, or completed, `expireOverdueReservations()` runs first on-demand. It queries requests with `status = "APPROVED"` where `expiresAt <= NOW()`, updates their status to `EXPIRED`, and logs the event. This guarantees that no user ever sees or is blocked by an expired reservation, without wasting server resources on background polling.
+**Answer:** No background cron job or scheduled task is used. Expiration checks run on-demand when relevant API operations invoke `expireOverdueReservations(fridgeId)` (such as when listing requests, viewing details, approving, or completing food requests). It queries requests with `status = "APPROVED"` and `expiresAt <= NOW()`, updates their status to `EXPIRED`, and returns their reserved quantity to available stock.
 
 ### Q5: How do you handle password security?
-**Answer:** Passwords are never stored in plaintext. During registration, we use `bcryptjs` with 10 salt rounds to hash the password before saving it to PostgreSQL. When logging in, `bcryptjs.compare` verifies the entered password against the stored hash in constant time to prevent timing attacks.
+**Answer:** Passwords are never stored in plaintext. During registration, `bcryptjs` hashes the password with 10 salt rounds before saving it to PostgreSQL. During login, `bcryptjs.compare` verifies the entered password against the stored hash.
 
 ### Q6: How are database relationships and cascading deletes configured?
 **Answer:** Relationships are defined in Prisma:
