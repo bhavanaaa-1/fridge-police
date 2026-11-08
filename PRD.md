@@ -2,6 +2,7 @@
 
 **Project Name:** FridgePolice
 **Document Version:** 2.0 (Viva Edition)
+**Target Audience:** Students, Viva Examiners, Project Reviewers
 **Live Application:** [https://fridge-police.vercel.app](https://fridge-police.vercel.app)
 **Backend API:** [https://fridge-police.onrender.com](https://fridge-police.onrender.com)
 
@@ -67,11 +68,11 @@ FridgePolice uses a role-based access control (RBAC) model on a per-fridge basis
 ### 4.3 Food Inventory Management
 - **FR-10 (Add Food Item):** Admins and Owners can add items with:
   - `name` (required string)
-  - `category` (optional: Dairy, Produce, Meat, Bakery, Beverage, Snack, Other)
-  - `quantity` (required positive number, stored as `Decimal(10, 2)`)
-  - `unit` (required string: pcs, kg, g, L, ml, slices, cups)
+  - `category` (optional: Dairy, Produce, Meat, Beverage, Snacks, Condiments, Leftovers, Other)
+  - `quantity` (positive decimal number)
+  - `unit` (e.g. "liters", "items", "grams")
   - `expiryDate` (optional date)
-  - `notes` (optional notes)
+  - `notes` (optional text)
 - **FR-11 (Search & Filter):** Members can search items by case-insensitive name match and filter by category with server-side pagination.
 - **FR-12 (Physical Reconciliation):** When items are eaten offline or spill, Admins and Owners can edit the quantity directly (`PATCH /api/fridges/:id/items/:itemId`).
 - **FR-13 (Discard / Delete Item):** When items spoil or are thrown away, Admins and Owners can delete them (`DELETE /api/fridges/:id/items/:itemId`).
@@ -79,16 +80,17 @@ FridgePolice uses a role-based access control (RBAC) model on a per-fridge basis
 ### 4.4 Food Requests & Reservation Lifecycle
 - **FR-14 (Create Request):** Any member can submit a portion request for an available item. The initial status is `PENDING`.
 - **FR-15 (Approval & Concurrency Lock):** Admins and Owners can approve pending requests. Approval runs in a serializable transaction with a database row lock (`SELECT ... FOR UPDATE`).
+  - This lock blocks concurrent transactions from updating, deleting, or locking the target `FoodItem` row until the transaction completes, while ordinary non-locking `SELECT` queries can still read the row.
   - Available stock is calculated as:
     $$\text{Available} = \text{Total Quantity} - \sum(\text{Active Approved Unexpired Reservations})$$
   - If requested quantity exceeds available stock, the approval is rejected with `HTTP 409 Conflict`.
 - **FR-16 (24-Hour Expiration Lease):** When a request is approved, an expiration timestamp is set to 24 hours in the future (`expiresAt = Date.now() + 24 hours`).
-- **FR-17 (Lazy Expiration Sweeping):** Stale approved requests older than 24 hours are automatically marked `EXPIRED` whenever requests are listed, viewed, approved, or completed. Expired requests immediately release their reserved stock.
+- **FR-17 (Lazy Expiration Sweeping):** Stale approved requests older than 24 hours are automatically marked `EXPIRED` on-demand whenever requests are listed, viewed, approved, or completed. Expired requests immediately release their reserved stock. No background cron job or independent scheduler is used.
 - **FR-18 (Cancellation):** Requesters can cancel their own pending requests. Admins and Owners can cancel any pending request.
 - **FR-19 (Complete Consumption):** When the food is physically collected, an Admin or Owner marks the request `COMPLETED`. The reserved amount is subtracted from the food item's recorded quantity.
 
 ### 4.5 Community Discovery & Join Requests
-- **FR-20 (Browse Public Fridges):** Users can search public discoverable fridges by name or description.
+- **FR-20 (Browse Public Fridges):** Users can search public discoverable fridges by name or description (text-based search).
 - **FR-21 (Public Data Privacy):** Public views only return safe public fields (fridge name, public description, optional member count, optional food preview). Member names, emails, and private notes are never exposed.
 - **FR-22 (Submit Join Request):** An authenticated user can submit a membership request (`POST /api/fridges/:id/join-requests`) with an optional note.
 - **FR-23 (Review Join Requests):** Owners and Admins can approve or reject join requests. Approving a request automatically adds the user to the fridge with the `MEMBER` role.
@@ -128,7 +130,7 @@ flowchart TD
         B6 --> B7["Admin Marks COMPLETED<br/>(Inventory Decrements)"]
     end
 
-    subgraph W3 ["Workflow 3: Reservation Expiry (Stale Claim)"]
+    subgraph W3 ["Workflow 3: Reservation Expiry (Lazy Evaluation)"]
         C1["Approved Request Not Consumed"] --> C2["24 Hours Pass"]
         C2 --> C3["Next API Query Runs Lazy Check"]
         C3 --> C4["Request Marked EXPIRED<br/>(Stock Automatically Freed)"]
@@ -154,6 +156,7 @@ flowchart TD
 - Direct inventory reconciliation and discard workflows with activity logs.
 - Public community discovery and authenticated join requests.
 - Responsive React interface with dark mode and client-side form validation.
+- Automated testing suite with 81 test declarations across 6 test suites.
 
 ### Out of Scope (Explicitly Not Implemented)
 - No mobile apps (responsive web only).

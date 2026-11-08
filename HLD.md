@@ -29,16 +29,17 @@ flowchart TD
     end
 
     subgraph Render ["Application Tier (Render)"]
-        ExpressApp["Express 5 REST API Engine"]
+        ExpressApp["Express 5 REST API Engine<br/>(Listens via app.listen(PORT))"]
         Middlewares["Auth Middleware & Role Check (RBAC)"]
         Controllers["Controllers & Zod Validation"]
         Services["Services (Business Logic & Transactions)"]
+        PrismaORM["Prisma 7 ORM Client<br/>(@prisma/adapter-pg)"]
     end
 
     subgraph NeonDB ["Data Tier (Neon Cloud)"]
         PgBouncer["Neon Connection Pooler (PgBouncer)<br/>(Runtime Queries: DATABASE_URL)"]
-        DirectPostgres["Neon Direct PostgreSQL 16<br/>(Migrations: DATABASE_URL_UNPOOLED)"]
-        PrismaORM["Prisma 7 ORM Client<br/>(@prisma/adapter-pg)"]
+        DirectPostgres["Neon Direct Connection<br/>(Migrations: DATABASE_URL_UNPOOLED)"]
+        PostgresEngine["PostgreSQL 16 Database Engine"]
     end
 
     User -->|"1. Visits App (HTTPS)"| VercelCDN
@@ -50,8 +51,9 @@ flowchart TD
     Controllers --> Services
     Services --> PrismaORM
     PrismaORM -->|"Runtime queries"| PgBouncer
-    PgBouncer --> DirectPostgres
-    ExpressApp -.->|"Runs schema migrations"| DirectPostgres
+    PgBouncer -->|"Pooled connection"| PostgresEngine
+    PrismaCLI["Prisma CLI (Migrations)<br/>(npx prisma migrate deploy)"] -->|"Direct unpooled connection"| DirectPostgres
+    DirectPostgres -->|"Applies schema migrations"| PostgresEngine
 ```
 
 ---
@@ -73,13 +75,15 @@ flowchart TD
 - Checks per-fridge role authorization (`OWNER`, `ADMIN`, `MEMBER`) via the `authorizeFridge` middleware.
 - Runs business logic inside services, managing database transactions (`prisma.$transaction`) and concurrency locks (`SELECT ... FOR UPDATE`).
 - Centralizes error handling so clients receive clean, predictable JSON error responses.
+- Listens using `app.listen(PORT)` (port provided by Render via `process.env.PORT`, or port 5000 in local development).
 
 ### 2.3 Database (Neon PostgreSQL 16 + Prisma ORM)
 - Stores all relational data across tables: `User`, `Fridge`, `FridgeMember`, `FoodItem`, `FoodRequest`, `MembershipRequest`, and `ActivityLog`.
 - Guarantees data integrity using foreign keys and cascade delete rules.
-- Prisma ORM generates type-safe query methods and manages schema migrations.
-- Uses Neon's connection pooling (PgBouncer) for standard web requests, preventing connection exhaustion under concurrent traffic.
-- Uses a direct unpooled connection for schema migrations (`prisma migrate dev` / `prisma migrate deploy`) so advisory locks function properly.
+- Prisma ORM generates type-safe query methods for application services.
+- Database schema migrations are executed through Prisma CLI commands (`prisma migrate dev` / `prisma migrate deploy`), not by the running Express application.
+- Uses Neon's connection pooling (PgBouncer) via `DATABASE_URL` for standard web requests, preventing connection exhaustion under concurrent traffic.
+- Uses a direct unpooled connection via `DATABASE_URL_UNPOOLED` for Prisma CLI migrations so PostgreSQL migration advisory locks function properly. Note that PgBouncer and the direct connection are distinct access routes to the PostgreSQL 16 database engine.
 
 ---
 
@@ -165,8 +169,8 @@ sequenceDiagram
 
     Admin->>Backend: PATCH /api/fridges/:id/requests/:reqId/approve
     Note over Backend, DB: Serializable Transaction Begins
-    Backend->>DB: SELECT id FROM "FoodItem" WHERE id = :id FOR UPDATE (Row Lock)
-    Note over DB: Target FoodItem row is locked against concurrent updates
+    Backend->>DB: SELECT id FROM "FoodItem" WHERE id = :id FOR UPDATE
+    Note over DB: Target FoodItem row is locked against conflicting updates, deletes, and locks (ordinary SELECT reads still permitted)
     Backend->>DB: Query active approved unexpired reservations for this item
     Backend->>Backend: Calculate Available = Locked Quantity - Total Reserved
     alt Requested Quantity > Available
@@ -224,5 +228,5 @@ flowchart TD
 | Tier | Host | Details |
 | :--- | :--- | :--- |
 | **Frontend** | **Vercel** | - Built from Git repository root using `npm run build` (`vite build`).<br/>- Outputs static assets to `dist/`.<br/>- `vercel.json` proxies `/api/*` requests to the Render backend URL. |
-| **Backend** | **Render** | - Containerized Node.js Web Service.<br/>- Root directory: `server`.<br/>- Build command: `npm install && npm run db:generate`.<br/>- Start command: `npm start`.<br/>- Health check path: `/api/health`. |
-| **Database** | **Neon** | - Serverless PostgreSQL 16 in cloud.<br/>- `DATABASE_URL` connects through PgBouncer for runtime connection pooling.<br/>- `DATABASE_URL_UNPOOLED` connects directly for running schema migrations. |
+| **Backend** | **Render** | - Containerized Node.js Web Service.<br/>- Root directory: `server`.<br/>- Build command: `npm install && npm run db:generate`.<br/>- Start command: `npm start`.<br/>- Server listens via `app.listen(PORT)` using `process.env.PORT` assigned by Render.<br/>- Health check path: `/api/health`. |
+| **Database** | **Neon** | - Serverless PostgreSQL 16 in cloud.<br/>- `DATABASE_URL` connects through PgBouncer for runtime connection pooling.<br/>- `DATABASE_URL_UNPOOLED` connects directly for running schema migrations via Prisma CLI.<br/>- Note: Express does not run migrations. |

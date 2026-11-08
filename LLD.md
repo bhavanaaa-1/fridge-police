@@ -22,7 +22,6 @@ erDiagram
 
     Fridge ||--o{ FridgeMember : "enrolled members"
     Fridge ||--o{ FoodItem : "contains food"
-    Fridge ||--o{ FoodRequest : "hosts requests"
     Fridge ||--o{ MembershipRequest : "receives applications"
     Fridge ||--o{ ActivityLog : "logs events"
 
@@ -117,7 +116,7 @@ erDiagram
 | **`Fridge`** | Represents an isolated fridge workspace and its privacy settings. | `id` (CUID) | - |
 | **`FridgeMember`** | Join table linking users to fridges with a specific role (`OWNER`, `ADMIN`, `MEMBER`). | Composite `[userId, fridgeId]` | `userId` $\to$ `User.id` (`onDelete: Cascade`)<br/>`fridgeId` $\to$ `Fridge.id` (`onDelete: Cascade`) |
 | **`FoodItem`** | Individual food inventory records with quantity, unit, and optional expiry date. | `id` (CUID) | `fridgeId` $\to$ `Fridge.id` (`onDelete: Cascade`)<br/>`createdById` $\to$ `User.id` (`onDelete: Restrict`) |
-| **`FoodRequest`** | State-tracked requests for food portions. | `id` (CUID) | `foodItemId` $\to$ `FoodItem.id` (`onDelete: Cascade`)<br/>`requesterId` $\to$ `User.id` (`onDelete: Cascade`)<br/>`approvedById` $\to$ `User.id` (`onDelete: SetNull`) |
+| **`FoodRequest`** | State-tracked requests for food portions. Belongs directly to `FoodItem` and `User`. Scoped to a fridge via `FoodItem.fridgeId`. | `id` (CUID) | `foodItemId` $\to$ `FoodItem.id` (`onDelete: Cascade`)<br/>`requesterId` $\to$ `User.id` (`onDelete: Cascade`)<br/>`approvedById` $\to$ `User.id` (`onDelete: SetNull`) |
 | **`MembershipRequest`** | Requests from users wanting to join an open fridge. | `id` (CUID) | `fridgeId` $\to$ `Fridge.id` (`onDelete: Cascade`)<br/>`userId` $\to$ `User.id` (`onDelete: Cascade`)<br/>`decidedById` $\to$ `User.id` (`onDelete: SetNull`) |
 | **`ActivityLog`** | Chronological audit logs of actions taken within a fridge. | `id` (CUID) | `fridgeId` $\to$ `Fridge.id` (`onDelete: Cascade`)<br/>`actorId` $\to$ `User.id` (`onDelete: SetNull`) |
 
@@ -247,7 +246,7 @@ stateDiagram-v2
     PENDING --> REJECTED : Admin rejects
     PENDING --> CANCELLED : Requester or Admin cancels
     PENDING --> APPROVED : Admin approves (Row Lock Acquired)
-    APPROVED --> EXPIRED : 24 Hours Pass Unconsumed
+    APPROVED --> EXPIRED : 24 Hours Pass Unconsumed (Lazy Check)
     APPROVED --> COMPLETED : Admin confirms physical pickup
     REJECTED --> [*]
     CANCELLED --> [*]
@@ -262,7 +261,7 @@ When an Admin approves a food request, the system must guarantee that two admins
 ```javascript
 // In server/src/services/request.service.js
 export async function approveRequest(fridgeId, requestId, userId) {
-  // 1. Run lazy expiration to sweep away any expired reservations first
+  // 1. Run lazy expiration to sweep away any expired reservations first (on-demand, no cron)
   await expireOverdueReservations(fridgeId);
 
   const attemptApproval = async () => {
@@ -275,6 +274,7 @@ export async function approveRequest(fridgeId, requestId, userId) {
         }
 
         // 3. Acquire exclusive row lock on the target FoodItem
+        // Blocks conflicting updates, deletes, and locks; ordinary SELECT reads still permitted
         await tx.$queryRaw`SELECT id FROM "FoodItem" WHERE id = ${request.foodItemId} FOR UPDATE`;
 
         // 4. Fetch the locked item's total quantity
