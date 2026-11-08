@@ -47,8 +47,8 @@ FridgePolice solves these issues with structured user roles, fair portion reques
   - `MEMBER`: Can browse inventory, submit portion requests, and view the activity log.
 - **Inventory Management:** Track food items with names, categories, decimal quantities, units, expiration dates, and notes.
 - **Fair Portion Requests:** Members can request specific amounts of available items with an optional note.
-- **Concurrency Protection:** Database row locking (`SELECT ... FOR UPDATE`) inside serializable transactions guarantees that two concurrent approvals cannot over-allocate the same food item.
-- **Automatic 24-Hour Expiry:** Approved reservations automatically expire after 24 hours if unconsumed, releasing the reserved stock for others.
+- **Concurrency Protection:** Database row locking (`SELECT ... FOR UPDATE`) inside serializable transactions blocks conflicting updates, deletes, and locks on the target item, guaranteeing two concurrent approvals cannot over-allocate stock while non-locking `SELECT` reads continue unimpeded.
+- **Automatic 24-Hour Expiry:** Approved reservations automatically expire after 24 hours if unconsumed via on-demand lazy checks during request operations, releasing reserved stock without any background cron job.
 - **Physical Inventory Reconciliation:** Admins and Owners can adjust item quantities or delete spoiled items, automatically logging who made the change.
 - **Activity Log:** Chronological audit trail showing all item additions, edits, requests, approvals, and completions.
 - **Public Fridge Discovery:** Fridges can be marked discoverable so others can view public previews and submit join requests.
@@ -64,7 +64,7 @@ FridgePolice solves these issues with structured user roles, fair portion reques
 | **Backend** | Node.js 20+, Express 5, Zod |
 | **Authentication** | JSON Web Tokens (`jsonwebtoken`), `bcryptjs` |
 | **Database & ORM** | PostgreSQL 16 on Neon, Prisma ORM 7 (`@prisma/adapter-pg`) |
-| **Testing** | Node.js native test runner (`node --test`) with 66 backend integration tests |
+| **Testing** | Node.js native test runner (`node --test`) with 81 test declarations across 6 test suites |
 | **Hosting** | Vercel (Frontend), Render (Backend), Neon (Cloud PostgreSQL) |
 
 ---
@@ -87,15 +87,18 @@ flowchart TD
     end
 
     subgraph Neon ["Neon Cloud Database"]
-        PgBouncer["PgBouncer Connection Pooler<br/>(DATABASE_URL)"]
-        PostgresDB["PostgreSQL 16 Database"]
+        PgBouncer["Neon Connection Pooler (PgBouncer)<br/>(Runtime Queries: DATABASE_URL)"]
+        DirectPostgres["Neon Direct Connection<br/>(Migrations: DATABASE_URL_UNPOOLED)"]
+        PostgresDB["PostgreSQL 16 Database Engine"]
     end
 
     ReactApp -->|"1. Loads UI"| StaticAssets
     ReactApp -->|"2. API calls (/api/*)"| VercelRewrite
     VercelRewrite -->|"Proxies to Render"| ExpressAPI
-    ExpressAPI -->|"Prisma Queries"| PgBouncer
-    PgBouncer --> PostgresDB
+    ExpressAPI -->|"Prisma Client queries"| PgBouncer
+    PgBouncer -->|"Pooled connection"| PostgresDB
+    PrismaCLI["Prisma CLI (Migrations)<br/>(prisma migrate deploy)"] -->|"Direct connection"| DirectPostgres
+    DirectPostgres -->|"Applies schema migrations"| PostgresDB
 ```
 
 ---
@@ -163,13 +166,15 @@ JWT_EXPIRES_IN="1d"
 
 ### Step 4: Run Database Migrations
 
-Generate the Prisma client and apply migrations:
+Generate the Prisma client and apply migrations using the Prisma CLI:
 ```bash
 cd server
 npm run db:generate
 npm run db:migrate
 cd ..
 ```
+
+> **Note:** Database migrations are executed exclusively via Prisma CLI commands (`prisma migrate`), not by the running Express application.
 
 ---
 
@@ -194,9 +199,20 @@ Open [http://localhost:5173](http://localhost:5173) in your browser. Vite's deve
 
 ## Running Backend Tests
 
-The project includes 66 automated backend integration tests covering authentication, email validation, inventory operations, food request concurrency, and security checks.
+The backend test suite consists of 81 test declarations across 6 test files covering authentication, email validation, inventory operations, food request concurrency, and security checks:
 
-Run all tests:
+- `auth.test.mjs` (14 tests)
+- `email-validation.test.mjs` (20 tests)
+- `inventory.test.mjs` (15 tests)
+- `request.test.mjs` (18 tests)
+- `discovery-and-membership.test.mjs` (5 tests)
+- `security.test.mjs` (9 tests)
+
+Total: **81 test declarations**.
+
+> **Note on Test Execution:** When running tests without a configured test database (`TEST_DATABASE_URL`), 19 tests run standalone without requiring database connectivity (14 in `auth.test.mjs` and 5 in `email-validation.test.mjs`). The full suite of 81 tests executes when `TEST_DATABASE_URL` is set to an active PostgreSQL database.
+
+Run tests:
 ```bash
 cd server
 npm test
@@ -214,8 +230,8 @@ node --test tests/auth.test.mjs
 ## Deployment Summary
 
 - **Frontend (Vercel):** Hosted as a static build from the repository root. `vercel.json` rewrites all `/api/*` traffic to `https://fridge-police.onrender.com/api/:path*`, so browser requests stay same-origin.
-- **Backend (Render):** Express server running in a Node.js container with root directory set to `server`. Start command is `npm start` and health check path is `/api/health`.
-- **Database (Neon):** Managed serverless PostgreSQL 16. Uses pooled connections for web requests and direct connections for schema migrations.
+- **Backend (Render):** Express server running in a Node.js container with root directory set to `server`. Start command is `npm start` and health check path is `/api/health`. Express listens via `app.listen(PORT)` on `process.env.PORT`.
+- **Database (Neon):** Managed serverless PostgreSQL 16. Uses pooled connections (PgBouncer) for web requests and direct connections for Prisma CLI migrations. Express does not run migrations.
 
 ---
 
@@ -246,5 +262,5 @@ fridge-police/
     |   |-- routes/              # API route definitions
     |   |-- services/            # Business logic and database operations
     |   `-- validators/          # Zod input validation schemas
-    `-- tests/                   # 66 automated integration tests
+    `-- tests/                   # 81 automated test declarations across 6 test suites
 ```

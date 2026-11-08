@@ -15,7 +15,7 @@
 3. [Frontend Implementation Details](#3-frontend-implementation-details)
 4. [Backend Implementation Details](#4-backend-implementation-details)
 5. [Database & Concurrency Design](#5-database--concurrency-design)
-6. [Testing Approach (66 Integration Tests)](#6-testing-approach-66-integration-tests)
+6. [Testing Approach (81 Test Declarations)](#6-testing-approach-81-test-declarations)
 7. [Deployment & Reverse Proxy Setup](#7-deployment--reverse-proxy-setup)
 8. [Frequently Asked Viva Questions & Model Answers](#8-frequently-asked-viva-questions--model-answers)
 
@@ -102,7 +102,7 @@
 ### Concept 10: Relational Database Design & Foreign Keys
 - **What it means:** Organizing data into tables where rows are related to one another through primary keys and foreign keys.
 - **Why we used it:** To enforce relational integrity and prevent orphan records (for example, food items existing without a fridge).
-- **How FridgePolice uses it:** `FoodItem` has a foreign key `fridgeId` referencing `Fridge.id`. If a fridge is deleted, `onDelete: Cascade` automatically deletes all its food items.
+- **How FridgePolice uses it:** `FoodItem` has a foreign key `fridgeId` referencing `Fridge.id`. If a fridge is deleted, `onDelete: Cascade` automatically deletes all its food items. `FoodRequest` belongs to `FoodItem` (`foodItemId`), linking portion requests directly to specific inventory items.
 
 ---
 
@@ -114,13 +114,13 @@
 ---
 
 ### Concept 12: Row-Level Locking (`SELECT ... FOR UPDATE`)
-- **What it means:** A database lock placed on a specific row that prevents any other concurrent transaction from reading or modifying that row until the locking transaction finishes.
-- **Why we used it:** To prevent race conditions where two concurrent requests check available stock at the same time and both think there is enough food.
+- **What it means:** An exclusive database lock placed on a specific row that blocks concurrent transactions from updating, deleting, or locking that row until the locking transaction finishes.
+- **Why we used it:** To prevent race conditions where two concurrent request approvals check available stock at the same time and both think there is enough food.
 - **How FridgePolice uses it:** In `approveRequest`, we run:
   ```sql
   SELECT id FROM "FoodItem" WHERE id = :id FOR UPDATE;
   ```
-  This locks the food item row, reads its current stock, checks all active unexpired reservations, and ensures stock is sufficient before committing the approval.
+  This locks the target food item row against concurrent modifications, reads its current stock, checks active unexpired reservations, and verifies availability before committing. Ordinary non-locking `SELECT` queries can still read the row while the lock is held.
 
 ---
 
@@ -133,7 +133,7 @@
 
 ### Concept 14: Lazy Reservation Expiry
 - **What it means:** Instead of running a background cron worker or timer thread, expiration checks are evaluated on-demand whenever data is queried.
-- **Why we used it:** Background workers on free serverless cloud hosts can go to sleep or suffer cold-start delays. Lazy checking guarantees that no user ever observes an expired reservation.
+- **Why we used it:** Background workers on free serverless cloud hosts can go to sleep or suffer cold-start delays. Lazy checking guarantees that no user ever observes an expired reservation, without running an unnecessary background scheduler.
 - **How FridgePolice uses it:** `expireOverdueReservations(fridgeId)` is called before listing, viewing, approving, or completing requests. It finds all requests where `status = "APPROVED"` and `expiresAt <= NOW()`, marks them `EXPIRED`, and releases their reserved quantity back into available stock.
 
 ---
@@ -227,7 +227,7 @@ fridge-police/
     |       |-- fridge.validator.js
     |       |-- inventory.validator.js
     |       `-- request.validator.js
-    `-- tests/                   # Automated Integration Tests
+    `-- tests/                   # Automated Integration Tests (81 test declarations)
         |-- auth.test.mjs
         |-- discovery-and-membership.test.mjs
         |-- email-validation.test.mjs
@@ -275,21 +275,26 @@ All HTTP calls pass through `apiRequest(path, options)`:
 - **`FridgeMember`**: `userId`, `fridgeId`, `role` (`OWNER`, `ADMIN`, `MEMBER`), `joinedAt`.
 - **`FoodItem`**: `id`, `fridgeId`, `name`, `category`, `quantity` (`Decimal(10, 2)`), `unit`, `expiryDate`, `notes`, `createdById`.
 - **`FoodRequest`**: `id`, `foodItemId`, `requesterId`, `requestedQuantity`, `status` (`PENDING`, `APPROVED`, `REJECTED`, `CANCELLED`, `EXPIRED`, `COMPLETED`), `note`, `approvedById`, `expiresAt`, `decidedAt`.
+  - *Note on Relationships:* `FoodRequest` belongs directly to `FoodItem` (via `foodItemId`) and `User` (via `requesterId` and `approvedById`). Requests are scoped to a fridge through the `FoodItem` relation (`foodItem.fridgeId`); there is no direct `fridgeId` column on `FoodRequest`.
 - **`MembershipRequest`**: `id`, `fridgeId`, `userId`, `status` (`PENDING`, `APPROVED`, `REJECTED`, `CANCELLED`), `note`, `decidedById`.
 - **`ActivityLog`**: `id`, `fridgeId`, `actorId`, `action`, `entityType`, `entityId`, `details` (JSON), `createdAt`.
 
 ---
 
-## 6. Testing Approach (66 Integration Tests)
+## 6. Testing Approach (81 Test Declarations)
 
-We verify our backend logic with 66 automated integration tests using Node.js's native test runner (`node --test tests/**/*.mjs`):
+We verify our backend logic with 81 test declarations across 6 test suites using Node.js's native test runner (`node --test tests/**/*.mjs`):
 
 1. **`auth.test.mjs` (14 tests):** Tests user registration, duplicate email rejection (HTTP 409), password hashing, login token generation, invalid password rejection, and role enforcement.
-2. **`email-validation.test.mjs` (11 tests):** Tests RFC email validation, uppercase-to-lowercase normalization, dots, plus signs, whitespace trimming, and minimum 8-character password length.
-3. **`inventory.test.mjs` (14 tests):** Tests creating items, non-member denial, owner/admin permissions, decimal quantities, pagination, search filtering, and deletion activity logs.
-4. **`request.test.mjs` (15 tests):** Tests submitting portion requests, approving, rejecting, cancelling, completing consumption, 24-hour expiration freeing stock, and concurrent approvals preventing overbooking.
+2. **`email-validation.test.mjs` (20 tests):** Tests RFC email validation, uppercase-to-lowercase normalization, dots, plus signs, whitespace trimming, and minimum 8-character password length.
+3. **`inventory.test.mjs` (15 tests):** Tests creating items, non-member denial, owner/admin permissions, decimal quantities, pagination, search filtering, and deletion activity logs.
+4. **`request.test.mjs` (18 tests):** Tests submitting portion requests, approving, rejecting, cancelling, completing consumption, 24-hour expiration freeing stock, and concurrent approvals preventing overbooking.
 5. **`discovery-and-membership.test.mjs` (5 tests):** Tests public fridge directory filtering, join request creation, and approval adding members.
-6. **`security.test.mjs` (7 tests):** Tests multi-tenant isolation (user cannot read or edit another fridge's items), malformed token rejection, and transaction rollback on error.
+6. **`security.test.mjs` (9 tests):** Tests multi-tenant isolation (user cannot read or edit another fridge's items), malformed token rejection, and transaction rollback on error.
+
+Total: **81 test declarations**.
+
+> **Execution Note:** In an offline environment or without `TEST_DATABASE_URL` configured, 19 tests run standalone without requiring database connections (14 in `auth.test.mjs` and 5 in `email-validation.test.mjs`). The full suite of 81 tests runs when an active test database is connected via `TEST_DATABASE_URL`. Do not claim all 81 tests pass unless they are executed against an active database.
 
 To run tests:
 ```bash
@@ -322,12 +327,13 @@ npm test
 - Root directory: `server`.
 - Build command: `npm install && npm run db:generate`.
 - Start command: `npm start`.
-- Binds to host `0.0.0.0` and port `process.env.PORT`.
+- Server entry point (`server/src/server.js`) listens via `app.listen(PORT)` on `process.env.PORT` provided by Render.
 - Liveness health check: `/api/health`.
 
 ### Neon (PostgreSQL Database)
 - `DATABASE_URL`: Pooled connection string using PgBouncer for high-concurrency runtime queries.
-- `DATABASE_URL_UNPOOLED`: Direct connection string for Prisma migrations (`npx prisma migrate deploy`).
+- `DATABASE_URL_UNPOOLED`: Direct connection string for Prisma migrations executed via Prisma CLI (`npx prisma migrate deploy`).
+- Note: Schema migrations are executed exclusively through Prisma CLI commands, not by the running Express application.
 
 ---
 
@@ -337,13 +343,20 @@ npm test
 **Answer:** It coordinates shared refrigerator usage in shared apartments and student hostels. It provides clear visibility into what food is available, enables fair portion requests, prevents two people from claiming the same food using database row locking, automatically releases forgotten reservations after 24 hours, and keeps an activity log when food is eaten offline.
 
 ### Q2: How does FridgePolice prevent two people from taking the last item simultaneously?
-**Answer:** In `approveRequest`, we start a database transaction with `Serializable` isolation and issue a row lock: `SELECT id FROM "FoodItem" WHERE id = :id FOR UPDATE`. This locks the food item row. We then calculate `Available = Total Quantity - Active Approved Reservations`. If the requested amount is greater than available stock, the approval is rejected with `HTTP 409 Conflict`. If a serialization conflict occurs, our backend retries up to 3 times before failing safely.
+**Answer:** In `approveRequest`, we start a database transaction with `Serializable` isolation and issue a row lock: `SELECT id FROM "FoodItem" WHERE id = :id FOR UPDATE`. This locks the food item row against conflicting updates, deletes, and other locks, while ordinary non-locking `SELECT` reads remain permitted. We then calculate `Available = Total Quantity - Active Approved Reservations`. If the requested amount is greater than available stock, the approval is rejected with `HTTP 409 Conflict`. If a serialization conflict occurs, our backend retries up to 3 times before failing safely.
 
 ### Q3: Why does your application use Vercel rewrites instead of CORS headers?
 **Answer:** Because the frontend calls `/api/*` on `https://fridge-police.vercel.app`, Vercel's edge network proxies the request directly to Render behind the scenes. From the browser's view, all requests are strictly same-origin. This avoids CORS preflight requests, eliminates cross-origin header issues, and ensures authentication headers are forwarded securely.
 
 ### Q4: How is reservation expiration handled? Is there a cron job?
-**Answer:** No background cron job is needed. We use lazy evaluation. Whenever requests are listed, viewed, approved, or completed, `expireOverdueReservations()` runs first. It queries requests with `status = "APPROVED"` where `expiresAt <= NOW()`, updates their status to `EXPIRED`, and logs the event. This guarantees that no user ever sees or is blocked by an expired reservation, without wasting server resources on idle polling.
+**Answer:** No background cron job or scheduled task is used. We use deterministic lazy evaluation. Whenever requests are listed, viewed, approved, or completed, `expireOverdueReservations()` runs first on-demand. It queries requests with `status = "APPROVED"` where `expiresAt <= NOW()`, updates their status to `EXPIRED`, and logs the event. This guarantees that no user ever sees or is blocked by an expired reservation, without wasting server resources on background polling.
 
 ### Q5: How do you handle password security?
-**Answer:** Passwords are never stored in plaintext. During registration, we use `bcryptjs` with 10 salt rounds to hash the password before saving it to PostgreSQL. When logging in, `bcryptjs.compare` verifies the entered password against the stored hash in constant time.
+**Answer:** Passwords are never stored in plaintext. During registration, we use `bcryptjs` with 10 salt rounds to hash the password before saving it to PostgreSQL. When logging in, `bcryptjs.compare` verifies the entered password against the stored hash in constant time to prevent timing attacks.
+
+### Q6: How are database relationships and cascading deletes configured?
+**Answer:** Relationships are defined in Prisma:
+- When a `Fridge` is deleted, its `FridgeMember`, `FoodItem`, `MembershipRequest`, and `ActivityLog` records are deleted via `onDelete: Cascade`.
+- When a `FoodItem` is deleted, all associated `FoodRequest` records are deleted via `onDelete: Cascade`.
+- `FoodRequest` belongs to `FoodItem` via `foodItemId` and `User` via `requesterId` and `approvedById`. It does not have a direct `fridgeId` column; queries are scoped through `foodItem.fridgeId`.
+- When a user account is deleted, their created food items are protected by `onDelete: Restrict` to avoid accidental loss of shared inventory.
