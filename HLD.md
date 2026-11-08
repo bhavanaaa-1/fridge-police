@@ -13,7 +13,7 @@
 FridgePolice uses a clean, standard three-tier architecture:
 
 1. **Presentation Tier (Frontend):** A Single Page Application (SPA) built with React 19 and Vite 8, hosted on Vercel.
-2. **Application Tier (Backend):** A REST API built with Node.js and Express 5, hosted as a containerized web service on Render.
+2. **Application Tier (Backend):** A REST API built with Node.js and Express 5, hosted as a Node.js web service on Render.
 3. **Data Tier (Database):** A PostgreSQL 16 database hosted on Neon, accessed through Prisma ORM 7.
 
 ```mermaid
@@ -196,7 +196,7 @@ sequenceDiagram
 
 ## 6. Stale Reservation Expiry Workflow (Lazy Evaluation)
 
-Instead of running an expensive background timer or cron process, FridgePolice uses **deterministic lazy expiration**:
+Instead of running a background cron worker or timer thread, expiration checks run on-demand when relevant API operations invoke `expireOverdueReservations(fridgeId)`:
 
 ```mermaid
 flowchart TD
@@ -228,5 +228,5 @@ flowchart TD
 | Tier | Host | Details |
 | :--- | :--- | :--- |
 | **Frontend** | **Vercel** | - Built from Git repository root using `npm run build` (`vite build`).<br/>- Outputs static assets to `dist/`.<br/>- `vercel.json` proxies `/api/*` requests to the Render backend URL. |
-| **Backend** | **Render** | - Containerized Node.js Web Service.<br/>- Root directory: `server`.<br/>- Build command: `npm install && npm run db:generate`.<br/>- Start command: `npm start`.<br/>- Server listens via `app.listen(PORT)` using `process.env.PORT` assigned by Render.<br/>- Health check path: `/api/health`. |
+| **Backend** | **Render** | - Node.js and Express Web Service.<br/>- Root directory: `server`.<br/>- Build command: `npm install && npm run db:generate`.<br/>- Start command: `npm start`.<br/>- Server listens via `app.listen(PORT)` using `process.env.PORT` assigned by Render.<br/>- Health check path: `/api/health`. |
 | **Database** | **Neon** | - Serverless PostgreSQL 16 in cloud.<br/>- `DATABASE_URL` connects through PgBouncer for runtime connection pooling.<br/>- `DATABASE_URL_UNPOOLED` connects directly for running schema migrations via Prisma CLI.<br/>- Note: Express does not run migrations. |
