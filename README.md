@@ -1,71 +1,250 @@
-# FridgePolice
+# FridgePolice 🧊👮
 
-A shared-fridge inventory and food coordination application that helps people manage food availability, request portions, prevent over-allocation, and keep inventory records accurate.
+A shared-fridge food inventory and request management web application built for roommates, hostel students, and shared households.
 
-## Features
+FridgePolice helps people living together track what food is in the fridge, request portions fairly, prevent two people from taking the same item, and keep digital records matching physical fridge shelves.
 
-- **Inventory Management:** View food items, quantities, and availability.
-- **Food Requests:** Request portions of available items.
-- **Request Approval:** Approve or reject requests while preventing multiple approvals from exceeding available quantities.
-- **Reservation Expiry:** Simulate expired reservations and release reserved portions.
-- **Inventory Corrections:** Record food that has been consumed, gone missing, or spoiled.
-- **Activity Log:** Maintain a record of inventory corrections and important actions.
-- **Local Persistence:** Store application data using browser local storage.
+---
+
+## Live Links
+
+- **Frontend App:** [https://fridge-police.vercel.app](https://fridge-police.vercel.app)
+- **Backend API:** [https://fridge-police.onrender.com](https://fridge-police.onrender.com)
+- **API Health Check:** [https://fridge-police.onrender.com/api/health](https://fridge-police.onrender.com/api/health)
+- **GitHub Repository:** [https://github.com/bhavanaaa-1/fridge-police](https://github.com/bhavanaaa-1/fridge-police)
+
+---
+
+## Documentation Links
+
+- [Product Requirements Document (PRD)](PRD.md) - Project objectives, user roles, functional requirements, and workflows.
+- [High-Level Design (HLD)](HLD.md) - System architecture, components, data flows, and deployment.
+- [Low-Level Design (LLD)](LLD.md) - Database schema, API routes, concurrency locks, and state lifecycles.
+- [Technical Documentation (Viva Guide)](docs/TECHNICAL_DOCUMENTATION.md) - Concept explanations, code structure, test approach, and viva questions.
+
+---
+
+## The Problem It Solves
+
+Living in a shared apartment or college hostel comes with common fridge problems:
+1. **Unclear Food Ownership:** Roommates do not know whether an item is shared or private.
+2. **Double Claiming:** Two roommates try to claim the last portion of food at the same time.
+3. **Forgotten Reservations:** Someone reserves food, never eats it, and it goes bad while others are prevented from eating it.
+4. **Physical Shelf Discrepancies:** Food gets eaten offline, spills, or spoils, causing the app inventory to differ from real shelves.
+5. **Community Fridge Coordination:** Shared kitchens need a way to show available food without revealing private member contact details.
+
+FridgePolice solves these issues with structured user roles, fair portion requests, database transactions that prevent double-booking, automatic 24-hour reservation expiry, and an activity log for physical corrections.
+
+---
+
+## Key Features
+
+- **User Accounts & Authentication:** Secure sign-up and login with password hashing (`bcryptjs`) and JSON Web Tokens (`jsonwebtoken`).
+- **Multi-Fridge Workspaces:** Users can create or belong to multiple fridges (e.g. "Flat 3B Fridge", "Office Kitchen").
+- **Role-Based Permissions:** Every fridge has roles:
+  - `OWNER`: Full administrative control, can add members by email and assign roles.
+  - `ADMIN`: Can add/edit/delete food, approve/reject requests, and complete consumptions.
+  - `MEMBER`: Can browse inventory, submit portion requests, and view the activity log.
+- **Inventory Management:** Track food items with names, categories, decimal quantities, units, expiration dates, and notes.
+- **Fair Portion Requests:** Members can request specific amounts of available items with an optional note.
+- **Concurrency Protection:** Database row locking (`SELECT ... FOR UPDATE`) inside serializable transactions guarantees that two concurrent approvals cannot over-allocate the same food item.
+- **Automatic 24-Hour Expiry:** Approved reservations automatically expire after 24 hours if unconsumed, releasing the reserved stock for others.
+- **Physical Inventory Reconciliation:** Admins and Owners can adjust item quantities or delete spoiled items, automatically logging who made the change.
+- **Activity Log:** Chronological audit trail showing all item additions, edits, requests, approvals, and completions.
+- **Public Fridge Discovery:** Fridges can be marked discoverable so others can view public previews and submit join requests.
+- **Responsive UI with Dark Mode:** Clean React interface with quick stats, search, filtering, and theme toggling.
+
+---
 
 ## Tech Stack
 
-- React
-- Vite
-- JavaScript
-- CSS
-- Browser Local Storage
+| Layer | Technologies Used |
+| :--- | :--- |
+| **Frontend** | React 19, Vite 8, CSS Variables, Oxlint |
+| **Backend** | Node.js 20+, Express 5, Zod |
+| **Authentication** | JSON Web Tokens (`jsonwebtoken`), `bcryptjs` |
+| **Database & ORM** | PostgreSQL 16 on Neon, Prisma ORM 7 (`@prisma/adapter-pg`) |
+| **Testing** | Node.js native test runner (`node --test`) with 66 backend integration tests |
+| **Hosting** | Vercel (Frontend), Render (Backend), Neon (Cloud PostgreSQL) |
 
-## Getting Started
+---
+
+## System Architecture
+
+```mermaid
+flowchart TD
+    subgraph Browser ["User Browser"]
+        ReactApp["React 19 Frontend<br/>(State-based Views & apiRequest Client)"]
+    end
+
+    subgraph Vercel ["Vercel Edge Network"]
+        StaticAssets["Static Frontend Build<br/>(HTML, CSS, JS)"]
+        VercelRewrite["Vercel API Rewrite<br/>(/api/:path* -> Render)"]
+    end
+
+    subgraph Render ["Render Container"]
+        ExpressAPI["Express 5 REST API<br/>(Auth, RBAC, Validation, Controllers)"]
+    end
+
+    subgraph Neon ["Neon Cloud Database"]
+        PgBouncer["PgBouncer Connection Pooler<br/>(DATABASE_URL)"]
+        PostgresDB["PostgreSQL 16 Database"]
+    end
+
+    ReactApp -->|"1. Loads UI"| StaticAssets
+    ReactApp -->|"2. API calls (/api/*)"| VercelRewrite
+    VercelRewrite -->|"Proxies to Render"| ExpressAPI
+    ExpressAPI -->|"Prisma Queries"| PgBouncer
+    PgBouncer --> PostgresDB
+```
+
+---
+
+## Getting Started Locally
 
 ### Prerequisites
+- **Node.js:** version 20.0.0 or higher
+- **npm:** version 10.0.0 or higher
+- **PostgreSQL Database:** A free [Neon](https://neon.tech) cloud database account or local PostgreSQL.
 
-Install [Node.js](https://nodejs.org/).
+---
 
-### Installation
-
-Clone the repository:
-
+### Step 1: Clone the Repository
 ```bash
-git clone YOUR_REPOSITORY_URL
+git clone https://github.com/bhavanaaa-1/fridge-police.git
+cd fridge-police
 ```
 
-Navigate to the project directory:
+---
 
-```bash
-cd FridgePolice
-```
+### Step 2: Install Dependencies
 
-Install dependencies:
-
+Install root frontend dependencies:
 ```bash
 npm install
 ```
 
-Start the development server:
+Install backend dependencies:
+```bash
+cd server
+npm install
+cd ..
+```
 
+---
+
+### Step 3: Configure Environment Variables
+
+Create `.env.local` in the project root:
+```env
+# Neon pooled connection string for runtime queries
+DATABASE_URL="postgresql://USER:PASSWORD@HOST-pooler.REGION.aws.neon.tech/DB?sslmode=require"
+
+# Neon direct connection string for Prisma migrations
+DATABASE_URL_UNPOOLED="postgresql://USER:PASSWORD@HOST.REGION.aws.neon.tech/DB?sslmode=require"
+
+# JWT configuration (must be at least 32 characters)
+JWT_SECRET="your-secure-jwt-secret-at-least-32-chars-long"
+JWT_EXPIRES_IN="1d"
+```
+
+Also create `server/.env`:
+```env
+PORT=5000
+DATABASE_URL="postgresql://USER:PASSWORD@HOST-pooler.REGION.aws.neon.tech/DB?sslmode=require"
+DATABASE_URL_UNPOOLED="postgresql://USER:PASSWORD@HOST.REGION.aws.neon.tech/DB?sslmode=require"
+JWT_SECRET="your-secure-jwt-secret-at-least-32-chars-long"
+JWT_EXPIRES_IN="1d"
+```
+
+> **Note:** The server checks `JWT_SECRET` at startup and will not start if it is missing or under 32 characters long.
+
+---
+
+### Step 4: Run Database Migrations
+
+Generate the Prisma client and apply migrations:
+```bash
+cd server
+npm run db:generate
+npm run db:migrate
+cd ..
+```
+
+---
+
+### Step 5: Start the Application
+
+Start the backend API server (Terminal 1):
+```bash
+cd server
+npm run dev
+# Backend runs at http://localhost:5000
+```
+
+Start the frontend development server (Terminal 2):
 ```bash
 npm run dev
+# Frontend runs at http://localhost:5173
 ```
 
-Open the local URL displayed in your terminal.
+Open [http://localhost:5173](http://localhost:5173) in your browser. Vite's development proxy routes `/api/*` requests to the Express server on port 5000.
 
-## Production Build
+---
 
-To create a production build, run:
+## Running Backend Tests
 
+The project includes 66 automated backend integration tests covering authentication, email validation, inventory operations, food request concurrency, and security checks.
+
+Run all tests:
 ```bash
-npm run build
+cd server
+npm test
 ```
 
-## Data Storage
+Run an individual test suite:
+```bash
+node --test tests/request.test.mjs
+node --test tests/inventory.test.mjs
+node --test tests/auth.test.mjs
+```
 
-FridgePolice currently uses browser local storage to persist application data. It does not currently use a shared backend database, so data is stored locally in the browser.
+---
 
-## Project Purpose
+## Deployment Summary
 
-FridgePolice aims to make shared-fridge coordination more reliable by improving inventory visibility, managing food requests, and recording changes to food availability.
+- **Frontend (Vercel):** Hosted as a static build from the repository root. `vercel.json` rewrites all `/api/*` traffic to `https://fridge-police.onrender.com/api/:path*`, so browser requests stay same-origin.
+- **Backend (Render):** Express server running in a Node.js container with root directory set to `server`. Start command is `npm start` and health check path is `/api/health`.
+- **Database (Neon):** Managed serverless PostgreSQL 16. Uses pooled connections for web requests and direct connections for schema migrations.
+
+---
+
+## Project Structure
+
+```
+fridge-police/
+|-- README.md                    # Main project overview and setup guide
+|-- PRD.md                       # Product requirements and user workflows
+|-- HLD.md                       # High-level architecture and component design
+|-- LLD.md                       # Low-level design, database schema, and APIs
+|-- vercel.json                  # Vercel reverse proxy rewrite to Render backend
+|-- package.json                 # Frontend dependencies and build scripts
+|-- vite.config.js               # Vite config with local dev proxy
+|-- docs/
+|   `-- TECHNICAL_DOCUMENTATION.md # In-depth technical explanations and viva guide
+|-- src/                         # React 19 Frontend
+|   |-- App.jsx                  # Main view coordinator and modal manager
+|   |-- components/              # UI components (Inventory, Requests, Discovery, Activity)
+|   `-- lib/api.js               # Reusable API fetch helper
+`-- server/                      # Express 5 Backend
+    |-- prisma/schema.prisma     # Relational database schema
+    |-- src/
+    |   |-- app.js               # Express application configuration
+    |   |-- server.js            # Server entry point and port listener
+    |   |-- controllers/         # HTTP request handlers
+    |   |-- middleware/          # JWT and role authorization middleware
+    |   |-- routes/              # API route definitions
+    |   |-- services/            # Business logic and database operations
+    |   `-- validators/          # Zod input validation schemas
+    `-- tests/                   # 66 automated integration tests
+```
