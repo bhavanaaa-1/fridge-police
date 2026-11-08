@@ -22,7 +22,6 @@
 - [Product Requirements Document (PRD)](PRD.md) - Product vision, user roles, functional & non-functional requirements.
 - [High-Level Design (HLD)](HLD.md) - System architecture, technology choices, data flows, and trade-offs.
 - [Low-Level Design (LLD)](LLD.md) - Implementation details, state machines, concurrency locks, and schemas.
-- [Engineering Scenarios & Challenge #8 (Changes.md)](Changes.md) - Solutions to Concurrency Collisions, Spoilage Ghosts, Identical Items, and Phantom Eaters.
 - [Comprehensive Technical Documentation](docs/TECHNICAL_DOCUMENTATION.md) - Full API reference, database schema, deployment guide, and codebase structure.
 
 ---
