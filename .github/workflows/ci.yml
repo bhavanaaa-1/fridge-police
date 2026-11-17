@@ -1,0 +1,40 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install dependencies
+        working-directory: server
+        run: npm install
+
+      - name: Build
+        working-directory: server
+        run: npm run build --if-present
+
+  deploy:
+    runs-on: ubuntu-24.04
+    needs: ci
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Trigger Render deploy
+        run: |
+          curl --fail-with-body --show-error \
+            -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
