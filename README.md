@@ -264,3 +264,5 @@ fridge-police/
     |   `-- validators/          # Zod input validation schemas
     `-- tests/                   # 81 automated test declarations across 6 test suites
 ```
+
+<!-- test cd pipeline -->
